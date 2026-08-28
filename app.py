@@ -1,0 +1,60 @@
+"""
+Main application entry point for the PS Locks Open Integration Platform.
+
+Initializes the FastAPI application, sets up routing, ensures database
+tables are created, and manages background service lifecycles (CAN bus
+listener and Master Beacon) via startup/shutdown events.
+"""
+
+from datetime import datetime
+import platform
+
+from fastapi import FastAPI
+
+from database.database import Base, engine
+from api.device import router as devices_router
+from api.system import router as system_router
+from config.globals import can_listener, beacon_service
+
+# Datenbanktabellen erzeugen
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(
+    title="PS Locks Open Integration Platform",
+    description="Open Integration Platform für Zutrittskontrolle und Gebäudeautomation",
+    version="0.3.0"
+)
+
+
+@app.on_event("startup")
+def startup():
+    """
+    Startup event handler for FastAPI.
+    
+    Starts the background CAN listener to process incoming messages and
+    the Master Beacon service to broadcast heartbeat/timing signals.
+    """
+    print("PS Locks OIP gestartet")
+    can_listener.start()
+    beacon_service.start()
+
+@app.on_event("shutdown")
+def shutdown():
+    """
+    Shutdown event handler for FastAPI.
+    
+    Gracefully stops the CAN listener and the Master Beacon background
+    services when the application shuts down.
+    """
+    can_listener.stop()
+    beacon_service.stop()
+
+
+app.include_router(
+    devices_router,
+    tags=["Devices"]
+)
+
+app.include_router(
+    system_router
+)
