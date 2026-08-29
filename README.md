@@ -48,7 +48,59 @@ The Gateway acts as the central bridge between IP networks and the low-level CAN
 
 ---
 
-## 2. Physical Layer & CAN Bus Configuration
+## 2. Core Concepts & Operational Logic
+
+### 1. Actuator Mechanics & Locking Actions
+- **Timed Unlock Pulse (`OPEN_LOCK`, 0x01)**: Retracts the bolt, maintains open state for dwell duration (2–3s), and automatically commands the motor to lock.
+- **Permanent Open (`OPEN_HOLD`, 0x04)**: Retracts the bolt and keeps the locking mechanism permanently open (e.g. for maintenance, daytime open-door mode, or emergency release).
+- **Lock Shut / Relock (`OPEN_RESET`, 0x05)**: Cancels any active hold-open state immediately and drives the motor to bolt the lock.
+
+### 2. Lock Operating Modes (Mode 1 vs Mode 2)
+- **Mode 1 (Locker / Free-Choice Mode)**: Lock remains open by default. Presenting a card claims the locker (locks bolt, stores UID in Slot 1 ephemeral credential storage). Presenting the identical card unlocks the bolt and clears ownership.
+- **Mode 2 (Auto-Close / Access Door Mode)**: Lock remains locked by default. Presenting an authorized credential retracts the bolt for a timed window (`auto_close_timeout_s`, default 3s) and automatically re-locks once the door contact closes.
+
+### 3. Door Close Guard Security System
+- Solves motor wear and open-door security breaches when doors are left ajar.
+- **Warning Phase (`door_warning_delay_s`)**: When door contact remains open beyond threshold, triggers optical green flash and ALARM1 sound pattern.
+- **Safe-Release Phase (`door_release_delay_s`)**: If door stays open after warning, device executes safe bolt release, resets occupancy, wipes Slot 1 guest credential, and flags `0x0D: DOOR_GUARD_TIMEOUT`.
+
+### 4. Optical & Acoustic Signaling Subsystem
+- **LED Patterns (Modes 0–5)**:
+  - `0`: OFF
+  - `1`: Solid Green (success / normal unlock)
+  - `2`: Solid Red (error / cloud deny)
+  - `3`: Blinking Green (customizable period and duty cycle via CAN parameters)
+  - `4`: Blinking Red
+  - `5`: Fast Blinking Green
+  - `TTL`: Configurable duration in seconds (0 = persistent until next command).
+- **Buzzer Patterns (Sounds 1–5)**:
+  - `1`: OK Tone (short positive chirp)
+  - `2`: NOT_OK Tone (two medium reject beeps)
+  - `3`: ERROR Tone (continuous failure tone)
+  - `4`: ALARM1 Pattern (intermittent Door Close Guard warning sequence)
+  - `5`: ALARM2 Pattern (continuous emergency acoustic alarm)
+
+### 5. Tiered Whitelist Architecture & Execution Policies
+- **Slot 1 (Ephemeral / Guest Credential)**: Dynamically bound upon claiming a locker; atomically cleared on unlock, master override, or guard timeout.
+- **Slots 2..N (Persistent / Staff / Master Keys)**: Stored in non-volatile EEPROM with configurable validity (`ttl_days`).
+- **Execution Policies**:
+  - `NORMAL (0)`: Default unlock according to active lock mode.
+  - `OPEN_KEEP_OCCUPANCY (1)`: Timed pulse unlock without clearing current guest reservation (for inspection/audit).
+  - `OPEN_AND_RELEASE (2)`: Master override; permanently unlocks bolt, atomically wipes Slot 1 guest key, and resets locker occupancy.
+
+### 6. Zero-Config Commissioning (Variant A Discovery)
+- Unprovisioned devices boot onto the bus with default ID `0x7F` emitting `0x57F ID_REQUEST` with their 32-bit hardware UID.
+- The Gateway automatically tracks unassigned nodes in memory (`/unassigned`) and provisions permanent Device IDs (1..126) and bitrates via atomic command.
+
+### 7. Multi-Frame RFID UID Assembly
+- Supports standard 4-byte UIDs as well as 7-byte / 8-byte extended credentials (e.g. Mifare DESFire). Split CAN frames (`UID_PART1` / `UID_PART2`) are reassembled transparently by the gateway.
+
+### 8. Master Beacon & Bus Synchronization (`0xB0`)
+- Global 1 Hz broadcast providing real-time bus timing, brown-out detection, master failover signaling, and node synchronization.
+
+---
+
+## 3. Physical Layer & CAN Bus Configuration
 
 The communication strictly follows the **PS Locks OIP CAN Protocol** (Standard 11-Bit Identifier, CAN 2.0A).
 
@@ -76,7 +128,7 @@ ip link show can0
 
 ---
 
-## 3. Installation & Quick Start
+## 4. Installation & Quick Start
 
 ### Prerequisites
 - Raspberry Pi 4 / 5 or Linux host with Python 3.11+.
@@ -106,9 +158,9 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 ---
 
-## 4. REST API Documentation
+## 5. REST API Documentation
 
-### 4.1 System & Gateway Heartbeat
+### 5.1 System & Gateway Heartbeat
 
 #### `GET /api/system/beacon`
 
@@ -131,7 +183,7 @@ Toggles the Master Beacon background service on or off.
 
 ---
 
-### 4.2 Device Discovery & Provisioning
+### 5.2 Device Discovery & Provisioning
 
 #### `GET /devices`
 
@@ -178,7 +230,7 @@ Assigns a permanent Device ID (1..126) and bit rate code to an unprovisioned loc
 
 ---
 
-### 4.3 Lock Control & Actuators
+### 5.3 Lock Control & Actuators
 
 #### `POST /devices/{id}/open`
 
@@ -226,7 +278,7 @@ Sets an optical override pattern on the lock's LED.
 
 ---
 
-### 4.4 Cloud Authentication & RFID Responses
+### 5.4 Cloud Authentication & RFID Responses
 
 #### `POST /devices/{id}/auth_response`
 
@@ -252,7 +304,7 @@ Field Definitions:
 
 ---
 
-### 4.5 Operating Modes & Door Close Guard (v0.4r4)
+### 5.5 Operating Modes & Door Close Guard (v0.4r4)
 
 #### `POST /devices/{id}/mode`
 
@@ -291,7 +343,7 @@ Returns the currently stored lock mode and door guard configuration.
 
 ---
 
-### 4.6 Whitelist Management (V2)
+### 5.6 Whitelist Management (V2)
 
 Slot 1 is reserved for dynamic/ephemeral cards (guest users), while Slots 2..N store permanent credentials.
 
@@ -361,7 +413,7 @@ Profiles:
 
 ---
 
-### 4.7 Telemetry & Diagnostics
+### 5.7 Telemetry & Diagnostics
 
 #### `GET /devices/{id}`
 
@@ -419,9 +471,9 @@ Reverts the lock to unprovisioned state (`0x7F`), resetting Device ID and flash 
 
 ---
 
-## 5. CAN Protocol Reference (Standard 11-Bit)
+## 6. CAN Protocol Reference (Standard 11-Bit)
 
-### 5.1 11-Bit CAN Identifier Layout
+### 6.1 11-Bit CAN Identifier Layout
 
 Formula: `CAN_ID = Base_ID | Device_ID` (Default / Unprovisioned ID = `0x7F`).
 
@@ -437,7 +489,7 @@ Formula: `CAN_ID = Base_ID | Device_ID` (Default / Unprovisioned ID = `0x7F`).
 
 ---
 
-### 5.2 Diagnostic Health Payloads (0x300 | devId)
+### 6.2 Diagnostic Health Payloads (0x300 | devId)
 
 | Payload Code | Name | Description & Key Fields |
 | --- | --- | --- |
@@ -451,7 +503,7 @@ Formula: `CAN_ID = Base_ID | Device_ID` (Default / Unprovisioned ID = `0x7F`).
 
 ---
 
-### 5.3 Normative Error Codes (`STATUS_ERROR 0xFF`)
+### 6.3 Normative Error Codes (`STATUS_ERROR 0xFF`)
 
 | Error Code | Identifier | Description |
 | --- | --- | --- |
@@ -471,7 +523,7 @@ Formula: `CAN_ID = Base_ID | Device_ID` (Default / Unprovisioned ID = `0x7F`).
 
 ---
 
-### 5.4 Physical & Decoded Lock States
+### 6.4 Physical & Decoded Lock States
 
 | State Code | Identifier | Bolt State | Door Contact Sensor |
 | --- | --- | --- | --- |
@@ -485,7 +537,7 @@ Formula: `CAN_ID = Base_ID | Device_ID` (Default / Unprovisioned ID = `0x7F`).
 
 ---
 
-## 6. Python Integration Example
+## 7. Python Integration Example
 
 Below is a complete script demonstrating how to discover an unassigned lock, commission it, write a persistent RFID card to its whitelist, and monitor door status:
 
@@ -556,7 +608,7 @@ if __name__ == "__main__":
 
 ---
 
-## 7. Testing
+## 8. Testing
 
 ### Hardware-Independent Unit Tests
 The project includes a comprehensive, hardware-independent test suite covering CAN opcodes, parser logic, and REST API endpoints (using mock interfaces). To run the suite locally:
@@ -576,7 +628,7 @@ python3 tests/exhaustive_hardware_test.py
 
 ---
 
-## 8. License & Support
+## 9. License & Support
 
 Developed for **PS GmbH** (Melisau 1255, 6863 Egg / Austria).
 
