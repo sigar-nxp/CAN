@@ -16,7 +16,7 @@ class CANService:
     def __init__(
         self,
         channel: str = "can0",
-        bitrate: int = 100000, #For production change to 50K. This is just for testing with current Test Hardware
+        bitrate: int = 50000,
         simulation: bool = False,
     ):
 

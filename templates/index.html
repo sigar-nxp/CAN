@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PS Locks OIP Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .toast-enter { transform: translateY(100%); opacity: 0; }
+        .toast-enter-active { transform: translateY(0); opacity: 1; transition: all 300ms ease-out; }
+        .toast-exit { transform: translateY(0); opacity: 1; }
+        .toast-exit-active { transform: translateY(100%); opacity: 0; transition: all 300ms ease-in; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+        .animate-pulse-slow { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans min-h-screen pb-10">
+    <!-- Header -->
+    <header class="bg-white shadow-sm sticky top-0 z-10 mb-6">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center space-x-4">
+                <h1 class="text-xl font-bold text-gray-900">PS Locks OIP Gateway</h1>
+                <div class="flex items-center space-x-2 text-sm text-green-600 font-medium">
+                    <span class="status-dot bg-green-500 animate-pulse-slow"></span>
+                    <span>Live</span>
+                </div>
+            </div>
+            <div class="flex items-center space-x-4">
+                <div class="flex items-center space-x-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-200">
+                    <span class="text-sm text-gray-600 font-medium">Master Beacon</span>
+                    <span id="beacon-status" class="status-dot bg-gray-400"></span>
+                    <button id="toggle-beacon-btn" onclick="toggleBeacon()" class="ml-2 text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2 py-1 rounded border border-indigo-200 transition-colors">Toggle</button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        
+        <!-- Global Control Hub -->
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-5 mb-8">
+            <h3 class="text-sm font-bold text-gray-800 uppercase tracking-wider mb-4 border-b pb-2">Global Control & Broadcast Hub</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <!-- Global Actuators -->
+                <div class="bg-gray-50 rounded p-4 border border-gray-100 flex flex-col">
+                    <h4 class="text-xs font-bold text-gray-600 mb-3">Global Actuator Actions</h4>
+                    <div class="flex flex-col space-y-2 mt-auto">
+                        <button onclick="globalAction('open')" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-1.5 px-3 rounded shadow-sm">Open All</button>
+                        <button onclick="globalAction('open_hold')" class="bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium py-1.5 px-3 rounded shadow-sm">Hold Open All</button>
+                        <button onclick="globalAction('reset')" class="bg-gray-700 hover:bg-gray-800 text-white text-sm font-medium py-1.5 px-3 rounded shadow-sm">Lock / Reset All</button>
+                    </div>
+                </div>
+                <!-- Global Signals -->
+                <div class="bg-gray-50 rounded p-4 border border-gray-100 flex flex-col">
+                    <h4 class="text-xs font-bold text-gray-600 mb-4">Global Signals Broadcast</h4>
+                    <div class="flex flex-col space-y-4 mt-auto">
+                        
+                        <!-- Buzzer Group -->
+                        <div>
+                            <span class="block text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">Buzzer</span>
+                            <div class="flex space-x-2">
+                                <button onclick="globalBuzzer(4, 5)" class="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Alarm Test</button>
+                                <button onclick="globalAction('buzzer_stop')" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Stop</button>
+                            </div>
+                        </div>
+                        
+                        <!-- LED Group -->
+                        <div>
+                            <span class="block text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">LED Overrides</span>
+                            <div class="flex space-x-2 mb-2">
+                                <button onclick="globalLED(1, 0, 0, 10)" class="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Green</button>
+                                <button onclick="globalLED(4, 50, 50, 10)" class="flex-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Red Blink</button>
+                            </div>
+                            <button onclick="globalAction('led_reset')" class="w-full bg-gray-600 hover:bg-gray-700 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Reset LEDs</button>
+                        </div>
+                        
+                    </div>
+                </div>
+                <!-- Master Card Sync -->
+                <div class="bg-gray-50 rounded p-4 border border-gray-100 flex flex-col">
+                    <h4 class="text-xs font-bold text-gray-600 mb-3">Master Card Sync (Slot 2)</h4>
+                    <div class="flex flex-col space-y-2 mt-auto">
+                        <input type="text" id="global-master-uid" placeholder="UID Hex (e.g. AABBCCDD)" class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        <input type="number" id="global-master-ttl" placeholder="TTL Days (0 = forever)" class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        <button onclick="globalMasterCard()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium py-1.5 px-3 rounded shadow-sm">Sync to All Locks</button>
+                    </div>
+                </div>
+                <!-- Emergency -->
+                <div class="bg-gray-50 rounded p-4 border border-gray-100 flex flex-col justify-between">
+                    <h4 class="text-xs font-bold text-gray-600 mb-3">Emergency & Security</h4>
+                    <button onclick="globalWhitelistWipe()" class="w-full bg-red-700 hover:bg-red-800 text-white text-sm font-medium py-2 px-3 rounded shadow-sm">Global Whitelist Wipe</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="unassigned-banner" class="hidden mb-8 bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded shadow-sm">
+            <div class="flex items-start">
+                <div class="ml-3 w-full">
+                    <h3 class="text-sm font-medium text-yellow-800">Unprovisioned Locks Detected</h3>
+                    <div class="mt-2 text-sm text-yellow-700">Assign a Node ID to integrate them into the network.</div>
+                    <div id="unassigned-list" class="mt-4 space-y-3"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="mb-4 flex justify-between items-end">
+            <h2 class="text-2xl font-semibold text-gray-900">Active Lock Nodes</h2>
+        </div>
+        
+        <div id="locker-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            <!-- Locker cards will be generated here -->
+        </div>
+    </main>
+
+    <!-- Modal -->
+    <div id="device-modal" class="fixed inset-0 z-50 hidden overflow-y-auto" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-gray-600 bg-opacity-75 transition-opacity" onclick="closeModal()"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen" aria-hidden="true">&#8203;</span>
+            <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl w-full">
+                <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
+                    <div class="flex justify-between items-center mb-5 border-b pb-3">
+                        <h3 class="text-xl leading-6 font-semibold text-gray-900" id="modal-title">Lock Management & Diagnostics (ID: <span id="modal-dev-id"></span>)</h3>
+                        <button type="button" class="text-gray-400 hover:text-gray-500 focus:outline-none" onclick="closeModal()">
+                            <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+                    
+                    <!-- Tabs Navigation -->
+                    <div class="border-b border-gray-200 mb-4 overflow-x-auto">
+                        <nav class="-mb-px flex space-x-8" aria-label="Tabs">
+                            <button onclick="switchTab('tab-signals')" id="nav-tab-signals" class="tab-link border-indigo-500 text-indigo-600 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">Signals & Overrides</button>
+                            <button onclick="switchTab('tab-mode')" id="nav-tab-mode" class="tab-link border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">Operation Mode</button>
+                            <button onclick="switchTab('tab-whitelist')" id="nav-tab-whitelist" class="tab-link border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">Whitelist</button>
+                            <button onclick="switchTab('tab-diagnostics')" id="nav-tab-diagnostics" class="tab-link border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">Diagnostics (P1-P8)</button>
+                            <button onclick="switchTab('tab-maintenance')" id="nav-tab-maintenance" class="tab-link border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">Maintenance</button>
+                        </nav>
+                    </div>
+                    
+                    <!-- Tab 1: Signals -->
+                    <div class="tab-content active" id="tab-signals">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div class="border rounded p-4 bg-gray-50">
+                                <h4 class="font-bold text-gray-700 mb-3 border-b pb-2">Buzzer Controls</h4>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Sound Profile</label>
+                                        <select id="modal-buzzer-sound" class="w-full border rounded p-2 text-sm">
+                                            <option value="1">1: OK / Accept</option>
+                                            <option value="2">2: Reject</option>
+                                            <option value="3">3: Error</option>
+                                            <option value="4">4: Alarm 1</option>
+                                            <option value="5">5: Alarm 2</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Repeat Count</label>
+                                        <input type="number" id="modal-buzzer-repeat" value="1" min="1" max="10" class="w-full border rounded p-2 text-sm">
+                                    </div>
+                                    <button onclick="modalTriggerBuzzer()" class="w-full bg-orange-500 text-white rounded py-2 text-sm font-medium hover:bg-orange-600">Play Buzzer</button>
+                                    <button onclick="modalAction('buzzer_stop')" class="w-full bg-gray-500 text-white rounded py-2 text-sm font-medium hover:bg-gray-600 mt-2">Stop Buzzer</button>
+                                </div>
+                            </div>
+                            <div class="border rounded p-4 bg-gray-50">
+                                <h4 class="font-bold text-gray-700 mb-3 border-b pb-2">LED Overrides</h4>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Mode</label>
+                                        <select id="modal-led-mode" class="w-full border rounded p-2 text-sm">
+                                            <option value="0">0: Off</option>
+                                            <option value="1">1: Solid Green</option>
+                                            <option value="2">2: Solid Red</option>
+                                            <option value="3">3: Blinking Green</option>
+                                            <option value="4">4: Blinking Red</option>
+                                            <option value="5">5: Fast Blink</option>
+                                        </select>
+                                    </div>
+                                    <div class="grid grid-cols-3 gap-2">
+                                        <div><label class="block text-xs text-gray-500">Prd(x10ms)</label><input type="number" id="modal-led-period" value="0" class="w-full border rounded p-1.5 text-sm"></div>
+                                        <div><label class="block text-xs text-gray-500">Duty(%)</label><input type="number" id="modal-led-duty" value="0" class="w-full border rounded p-1.5 text-sm"></div>
+                                        <div><label class="block text-xs text-gray-500">TTL(s)</label><input type="number" id="modal-led-ttl" value="5" class="w-full border rounded p-1.5 text-sm"></div>
+                                    </div>
+                                    <button onclick="modalTriggerLED()" class="w-full bg-green-600 text-white rounded py-2 text-sm font-medium hover:bg-green-700">Set LED</button>
+                                    <button onclick="modalAction('led_reset')" class="w-full bg-gray-500 text-white rounded py-2 text-sm font-medium hover:bg-gray-600 mt-2">Reset LED</button>
+                                </div>
+                            </div>
+                            <div class="border rounded p-4 bg-gray-50">
+                                <h4 class="font-bold text-gray-700 mb-3 border-b pb-2">Cloud RFID Sim</h4>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Auth Result</label>
+                                        <select id="modal-rfid-result" class="w-full border rounded p-2 text-sm">
+                                            <option value="1">Allow</option>
+                                            <option value="0">Deny</option>
+                                            <option value="2">Not Found</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Action</label>
+                                        <select id="modal-rfid-action" class="w-full border rounded p-2 text-sm">
+                                            <option value="0">None</option>
+                                            <option value="1">Close</option>
+                                            <option value="2">Open</option>
+                                        </select>
+                                    </div>
+                                    <button onclick="modalTriggerRFID()" class="w-full bg-blue-600 text-white rounded py-2 text-sm font-medium hover:bg-blue-700">Send Response</button>
+                                    <div class="flex items-center mt-3 pt-3 border-t border-gray-200">
+                                        <input type="checkbox" id="modal-rfid-auto" class="h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                                        <label class="ml-2 block text-xs text-gray-700">Auto-Reply on next card scan</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: Mode -->
+                    <div class="tab-content" id="tab-mode">
+                        <div class="max-w-xl mx-auto border rounded p-6 bg-gray-50">
+                            <h4 class="font-bold text-gray-800 mb-4 border-b pb-2">Lock Operation Parameters</h4>
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Operation Mode</label>
+                                    <select id="modal-mode-select" class="w-full border-gray-300 rounded-md p-2 border">
+                                        <option value="1">Mode 1: Locker Free-Choice</option>
+                                        <option value="2">Mode 2: Auto-Close Access Door</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center">
+                                    <input type="checkbox" id="modal-dcg-checkbox" class="h-4 w-4 text-indigo-600 border-gray-300 rounded">
+                                    <label class="ml-2 block text-sm text-gray-900">Enable Door Close Guard (behavior_flag: 1)</label>
+                                </div>
+                                <div class="grid grid-cols-3 gap-4 pt-2">
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Auto Close (s)</label>
+                                        <input type="number" id="modal-mode-autoclose" class="w-full border rounded p-2 text-sm mt-1">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Door Warning (s)</label>
+                                        <input type="number" id="modal-mode-warning" class="w-full border rounded p-2 text-sm mt-1">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Door Release (s)</label>
+                                        <input type="number" id="modal-mode-release" class="w-full border rounded p-2 text-sm mt-1">
+                                    </div>
+                                </div>
+                                <button onclick="saveLockMode()" class="w-full bg-indigo-600 text-white rounded-md py-2 px-4 text-sm font-medium hover:bg-indigo-700 mt-4 shadow-sm">Save Mode Config</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 3: Whitelist -->
+                    <div class="tab-content" id="tab-whitelist">
+                        <div class="flex flex-col md:flex-row gap-6">
+                            <div class="md:w-1/3 border rounded p-4 bg-gray-50">
+                                <h4 class="font-bold text-gray-700 mb-3 border-b pb-2">Add Credential</h4>
+                                <div class="space-y-3">
+                                    <div><label class="block text-xs text-gray-500">Slot Index</label><input type="number" id="wl-slot" value="1" class="w-full border rounded p-1.5 text-sm"></div>
+                                    <div><label class="block text-xs text-gray-500">UID (Hex)</label><input type="text" id="wl-uid" placeholder="AABBCCDD" class="w-full border rounded p-1.5 text-sm"></div>
+                                    <div><label class="block text-xs text-gray-500">TTL (Days)</label><input type="number" id="wl-ttl" value="0" class="w-full border rounded p-1.5 text-sm"></div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Policy</label>
+                                        <select id="wl-policy" class="w-full border rounded p-1.5 text-sm">
+                                            <option value="0">0: Normal</option>
+                                            <option value="1">1: Keep Occupancy</option>
+                                            <option value="2">2: Open & Release</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500">Open Action</label>
+                                        <select id="wl-action" class="w-full border rounded p-1.5 text-sm">
+                                            <option value="0">0: None</option>
+                                            <option value="1">1: Close</option>
+                                            <option value="2">2: Open</option>
+                                        </select>
+                                    </div>
+                                    <button onclick="addWhitelist()" class="w-full bg-indigo-600 text-white rounded py-2 text-sm font-medium hover:bg-indigo-700 shadow-sm">Write to Whitelist</button>
+                                </div>
+                            </div>
+                            <div class="md:w-2/3 flex flex-col">
+                                <div class="flex justify-between items-center mb-3">
+                                    <h4 class="font-bold text-gray-700">Active Slots</h4>
+                                    <div>
+                                        <button onclick="fetchWhitelist()" class="bg-gray-100 hover:bg-gray-200 text-gray-800 text-xs py-1 px-2 rounded shadow-sm mr-2 border">Refresh</button>
+                                        <button onclick="wipeWhitelist()" class="bg-red-600 hover:bg-red-700 text-white text-xs py-1 px-2 rounded shadow-sm">Wipe All</button>
+                                    </div>
+                                </div>
+                                <div class="overflow-x-auto border rounded flex-1">
+                                    <table class="min-w-full divide-y divide-gray-200 text-sm">
+                                        <thead class="bg-gray-100">
+                                            <tr>
+                                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Slot</th>
+                                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">UID</th>
+                                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">TTL</th>
+                                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Policy/Act</th>
+                                                <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="wl-table-body" class="bg-white divide-y divide-gray-200">
+                                            <tr><td colspan="5" class="px-3 py-4 text-center text-gray-500">Loading...</td></tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 4: Diagnostics -->
+                    <div class="tab-content" id="tab-diagnostics">
+                        <div class="flex justify-between items-center mb-4">
+                            <h4 class="font-bold text-gray-800">Real-time Telemetry (P1-P8)</h4>
+                            <button onclick="refreshDiagnosticsBtn()" class="bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 py-1 px-3 rounded text-sm transition-colors font-medium">Force Refresh Data</button>
+                        </div>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                            <div class="bg-gray-50 p-3 rounded border shadow-sm">
+                                <div class="text-xs text-gray-500 uppercase">VCC Supply</div>
+                                <div class="text-lg font-mono font-bold text-gray-900" id="diag-vcc">--</div>
+                            </div>
+                            <div class="bg-gray-50 p-3 rounded border shadow-sm">
+                                <div class="text-xs text-gray-500 uppercase">Chip Temp</div>
+                                <div class="text-lg font-mono font-bold text-gray-900" id="diag-temp">--</div>
+                            </div>
+                            <div class="bg-gray-50 p-3 rounded border shadow-sm">
+                                <div class="text-xs text-gray-500 uppercase">Free RAM</div>
+                                <div class="text-lg font-mono font-bold text-gray-900" id="diag-ram">--</div>
+                            </div>
+                            <div class="bg-gray-50 p-3 rounded border shadow-sm">
+                                <div class="text-xs text-gray-500 uppercase">System Uptime</div>
+                                <div class="text-lg font-mono font-bold text-gray-900" id="diag-uptime">--</div>
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="border rounded p-4">
+                                <h5 class="text-sm font-semibold text-gray-700 border-b pb-1 mb-2">Error Counters & Resets</h5>
+                                <table class="w-full text-sm">
+                                    <tr class="border-b"><td class="py-1 text-gray-600">Watchdog Resets</td><td class="font-mono text-right" id="diag-watchdog">--</td></tr>
+                                    <tr class="border-b"><td class="py-1 text-gray-600">Brownout Resets</td><td class="font-mono text-right" id="diag-brownout">--</td></tr>
+                                    <tr class="border-b"><td class="py-1 text-gray-600">CAN TX Errors</td><td class="font-mono text-right" id="diag-can-tx">--</td></tr>
+                                    <tr class="border-b"><td class="py-1 text-gray-600">CAN RX Errors</td><td class="font-mono text-right" id="diag-can-rx">--</td></tr>
+                                    <tr class="border-b"><td class="py-1 text-gray-600">Bus-Off Recovery</td><td class="font-mono text-right" id="diag-bus-off">--</td></tr>
+                                    <tr><td class="py-1 text-gray-600">Physical Rev/Reset Rs</td><td class="font-mono text-right" id="diag-rev">--</td></tr>
+                                </table>
+                            </div>
+                            <div class="border rounded p-4">
+                                <h5 class="text-sm font-semibold text-gray-700 border-b pb-1 mb-2">Device Info & State</h5>
+                                <table class="w-full text-sm">
+                                    <tr class="border-b"><td class="py-1 text-gray-600">Firmware Version</td><td class="font-mono text-right" id="diag-fw">--</td></tr>
+                                    <tr class="border-b"><td class="py-1 text-gray-600">Hardware Info</td><td class="font-mono text-right" id="diag-hw">--</td></tr>
+                                    <tr class="border-b"><td class="py-1 text-gray-600">Occupancy Flag</td><td class="font-mono text-right" id="diag-occ-flag">--</td></tr>
+                                    <tr class="border-b"><td class="py-1 text-gray-600">Owner Present</td><td class="font-mono text-right" id="diag-occ-owner">--</td></tr>
+                                    <tr><td class="py-1 text-gray-600">State Counter</td><td class="font-mono text-right" id="diag-occ-counter">--</td></tr>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab 5: Maintenance -->
+                    <div class="tab-content" id="tab-maintenance">
+                        <div class="max-w-lg mx-auto space-y-6 pt-4">
+                            <div class="border rounded p-5 bg-yellow-50 border-yellow-200 shadow-sm">
+                                <h4 class="font-bold text-yellow-800 mb-2">Warm Reboot</h4>
+                                <p class="text-sm text-yellow-700 mb-4">Soft reboots the microcontroller. Lock state is preserved, but temporary overrides (like LED/Buzzer) are cleared.</p>
+                                <button onclick="modalAction('device_reset')" class="w-full bg-yellow-500 hover:bg-yellow-600 text-white py-2 rounded shadow font-medium">Reboot Device</button>
+                            </div>
+                            <div class="border rounded p-5 bg-red-50 border-red-200 shadow-sm">
+                                <h4 class="font-bold text-red-800 mb-2">Factory Reset / Unassign</h4>
+                                <p class="text-sm text-red-700 mb-4">Erases all settings, whitelists, and clears the Node ID. The lock will need to be re-provisioned via the unassigned pool.</p>
+                                <button onclick="confirmFactoryReset()" class="w-full bg-red-600 hover:bg-red-700 text-white py-2 rounded shadow font-medium">Execute Factory Reset</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toasts -->
+    <div id="toast-container" class="fixed bottom-4 right-4 flex flex-col space-y-2 z-50 pointer-events-none"></div>
+
+    <script>
+        const API = {
+            async post(url, body) { const res = await fetch(url, { method: 'POST', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined }); return res.json(); },
+            async get(url) { const res = await fetch(url); return res.json(); },
+            async delete(url) { const res = await fetch(url, { method: 'DELETE' }); return res.json(); }
+        };
+        let devices = [];
+        let modalDeviceId = null;
+        let activeTab = 'tab-signals';
+        let previousScannedCard = {};
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const bg = type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : type === 'warning' ? 'bg-orange-500' : 'bg-gray-800';
+            toast.className = `toast-enter ${bg} text-white px-4 py-3 rounded shadow-lg flex items-center min-w-[250px] pointer-events-auto`;
+            toast.innerHTML = `<span class="flex-1">${message}</span><button onclick="this.parentElement.remove()" class="ml-4 text-white opacity-70 hover:opacity-100">&times;</button>`;
+            container.appendChild(toast);
+            requestAnimationFrame(() => { toast.classList.remove('toast-enter'); toast.classList.add('toast-enter-active'); });
+            setTimeout(() => {
+                toast.classList.remove('toast-enter-active'); toast.classList.add('toast-exit');
+                requestAnimationFrame(() => { toast.classList.remove('toast-exit'); toast.classList.add('toast-exit-active'); });
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+        async function updateBeaconStatus() {
+            try {
+                const status = await API.get('/api/system/beacon');
+                const dot = document.getElementById('beacon-status');
+                dot.className = status.running ? 'status-dot bg-blue-500 animate-pulse-slow' : 'status-dot bg-gray-400';
+            } catch (e) {}
+        }
+        async function toggleBeacon() { try { await API.post('/api/system/beacon/toggle'); updateBeaconStatus(); showToast('Master Beacon toggled', 'success'); } catch (e) { showToast('Failed to toggle beacon', 'error'); } }
+        async function fetchSystem() {
+            try {
+                const unRes = await API.get('/unassigned');
+                renderUnassigned(unRes);
+                devices = await API.get('/devices');
+                for (const dev of devices) {
+                    if (dev.online) {
+                        try {
+                            const details = await API.get(`/devices/${dev.device_id}`);
+                            const health = await API.get(`/devices/${dev.device_id}/health`);
+                            renderLockerCard(dev.device_id, details, health);
+
+                            if (previousScannedCard[dev.device_id] !== details.last_scanned_card) {
+                                previousScannedCard[dev.device_id] = details.last_scanned_card;
+                                
+                                if (modalDeviceId === dev.device_id && document.getElementById('modal-rfid-auto')?.checked) {
+                                    if (details.last_scanned_card !== "None" && details.last_scanned_card !== null) {
+                                        showToast("Auto-Reply triggered!", "info");
+                                        modalTriggerRFID();
+                                    }
+                                }
+                            }
+                        } catch (e) {}
+                    }
+                }
+                if (modalDeviceId && activeTab === 'tab-diagnostics') refreshDiagnosticsData();
+            } catch (e) {}
+        }
+        function renderUnassigned(list) {
+            const banner = document.getElementById('unassigned-banner');
+            const container = document.getElementById('unassigned-list');
+            if (!list || list.length === 0) { banner.classList.add('hidden'); return; }
+            banner.classList.remove('hidden');
+            let html = '';
+            list.forEach(item => {
+                const uidHex = item.uid32_hex || (item.uid32 ? item.uid32.toString(16).toUpperCase() : 'UNKNOWN');
+                const uidVal = item.uid32 || 0;
+                html += `<div class="flex items-center justify-between bg-white bg-opacity-50 p-2 rounded border border-yellow-200">
+                        <span class="font-mono text-sm text-yellow-900">UID: ${uidHex}</span>
+                        <div class="flex space-x-2">
+                            <input type="number" id="assign-id-${uidVal}" placeholder="ID (1-127)" class="w-24 text-sm border-gray-300 rounded shadow-sm px-2 py-1">
+                            <button onclick="assignDevice(${uidVal}, document.getElementById('assign-id-${uidVal}').value)" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium py-1 px-3 rounded shadow-sm">Assign</button>
+                        </div></div>`;
+            });
+            if (container.innerHTML !== html) container.innerHTML = html;
+        }
+        async function assignDevice(uid32, deviceId) {
+            if (!deviceId || deviceId < 1 || deviceId > 127) return showToast('Invalid Device ID', 'error');
+            try { await API.post('/devices/assign', { uid32: parseInt(uid32), device_id: parseInt(deviceId), bitrate_code: 4 }); showToast(`Assigned ID ${deviceId}`, 'success'); } catch (e) { showToast('Assignment failed', 'error'); }
+        }
+        function renderLockerCard(id, details, health) {
+            const grid = document.getElementById('locker-grid');
+            let card = grid.querySelector(`[data-id="${id}"]`);
+            const isLocked = details.is_locked;
+            const isClosed = details.is_door_closed;
+            let headerBg = isLocked ? 'bg-red-50 border-red-200' : (!isClosed ? 'bg-yellow-50 border-yellow-200' : 'bg-green-50 border-green-200');
+            let headerText = isLocked ? 'text-red-800' : (!isClosed ? 'text-yellow-800' : 'text-green-800');
+            let statusLabel = isLocked ? 'Bolted' : (!isClosed ? 'Door Open' : 'Unlocked / Closed');
+            let labelClass = isLocked ? 'bg-red-100 text-red-800' : (!isClosed ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800');
+            const vcc = health?.health_short?.vcc_mv ? (health.health_short.vcc_mv / 1000).toFixed(2) + 'V' : '--';
+            const temp = health?.health_short?.temp_c !== undefined ? health.health_short.temp_c + '°C' : '--';
+            const innerHTML = `<div class="px-4 py-3 border-b flex justify-between items-center rounded-t-lg transition-colors ${headerBg}">
+                    <h3 class="text-lg font-bold ${headerText}">Lock ${id}</h3><span class="text-xs font-semibold px-2 py-1 rounded-full ${labelClass}">${statusLabel}</span>
+                </div>
+                <div class="p-4 flex-1 flex flex-col space-y-3 bg-white rounded-b-lg">
+                    <div class="grid grid-cols-2 gap-2 text-sm">
+                        <div class="bg-gray-50 p-2 rounded flex justify-between border"><span class="text-gray-500">Bolt</span><span class="font-medium ${isLocked ? 'text-red-600' : 'text-green-600'}">${isLocked ? 'Bolted' : 'Retracted'}</span></div>
+                        <div class="bg-gray-50 p-2 rounded flex justify-between border"><span class="text-gray-500">Door</span><span class="font-medium ${isClosed ? 'text-green-600' : 'text-yellow-600'}">${isClosed ? 'Closed' : 'Open'}</span></div>
+                        <div class="bg-gray-50 p-2 rounded flex justify-between border"><span class="text-gray-500">RFID</span><span class="font-mono text-xs font-medium text-gray-700">${details.last_scanned_card || 'None'}</span></div>
+                        <div class="bg-gray-50 p-2 rounded flex justify-between border"><span class="text-gray-500">VCC/Tmp</span><span class="font-mono text-xs font-medium text-gray-700">${vcc} | ${temp}</span></div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-2 mt-2">
+                        <button onclick="deviceAction(${id}, 'open')" class="bg-blue-50 hover:bg-blue-100 text-blue-700 py-1.5 px-2 rounded border border-blue-200 text-xs font-medium">Open Pulse</button>
+                        <button onclick="deviceAction(${id}, 'open_hold')" class="bg-purple-50 hover:bg-purple-100 text-purple-700 py-1.5 px-2 rounded border border-purple-200 text-xs font-medium">Hold Open</button>
+                        <button onclick="deviceAction(${id}, 'reset')" class="bg-gray-100 hover:bg-gray-200 text-gray-800 py-1.5 px-2 rounded border border-gray-300 text-xs font-medium">Lock/Reset</button>
+                    </div>
+                    <button onclick="openModal(${id})" class="mt-2 w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 border border-indigo-200 rounded text-sm font-semibold transition-colors shadow-sm">Manage & Diagnostics</button>
+                </div>`;
+            if (!card) {
+                card = document.createElement('div');
+                card.className = 'rounded-lg shadow-sm border border-gray-200 flex flex-col h-full';
+                card.setAttribute('data-id', id);
+                card.innerHTML = innerHTML;
+                grid.appendChild(card);
+            } else if (card.innerHTML !== innerHTML) { card.innerHTML = innerHTML; }
+        }
+        async function deviceAction(id, action) { try { await API.post(`/devices/${id}/${action}`); showToast(`Action '${action}' sent to Lock ${id}`, 'success'); } catch (e) { showToast('Action failed', 'error'); } }
+        async function globalAction(action) {
+            if (devices.length === 0) return; showToast(`Broadcasting ${action}...`, 'info');
+            devices.forEach(d => { if(d.online) API.post(`/devices/${d.device_id}/${action}`).catch(()=>{}); });
+        }
+        async function globalBuzzer(sound, repeat) {
+            devices.forEach(d => { if(d.online) API.post(`/devices/${d.device_id}/buzzer`, { sound, repeat }).catch(()=>{}); });
+            showToast('Global Buzzer signal sent', 'success');
+        }
+        async function globalLED(mode, period10ms, duty, ttl) {
+            devices.forEach(d => { if(d.online) API.post(`/devices/${d.device_id}/led`, { mode, period10ms, duty, ttl }).catch(()=>{}); });
+            showToast('Global LED signal sent', 'success');
+        }
+        async function globalMasterCard() {
+            const uidHex = document.getElementById('global-master-uid').value;
+            if(!uidHex) return showToast('Enter UID', 'error');
+            const ttl = parseInt(document.getElementById('global-master-ttl').value) || 0;
+            devices.forEach(d => {
+                if(d.online) {
+                    API.post(`/devices/${d.device_id}/whitelist`, { slot_index: 2, uid_hex: uidHex, ttl_days: ttl })
+                    .then(() => API.post(`/devices/${d.device_id}/whitelist/2/policy`, { policy: 2, open_action: 2, flags: 0 })).catch(()=>{});
+                }
+            });
+            showToast('Master card sync initiated', 'info');
+        }
+        async function globalWhitelistWipe() {
+            if(!confirm("WIPE whitelist for ALL active locks?")) return;
+            devices.forEach(d => { if(d.online) API.delete(`/devices/${d.device_id}/whitelist`).catch(()=>{}); });
+            showToast('Global wipe initiated', 'warning');
+        }
+        function switchTab(tabId) {
+            activeTab = tabId;
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-link').forEach(el => {
+                el.classList.remove('border-indigo-500', 'text-indigo-600'); el.classList.add('border-transparent', 'text-gray-500');
+            });
+            document.getElementById(tabId).classList.add('active');
+            const navId = 'nav-' + tabId;
+            document.getElementById(navId).classList.remove('border-transparent', 'text-gray-500');
+            document.getElementById(navId).classList.add('border-indigo-500', 'text-indigo-600');
+            if (tabId === 'tab-diagnostics' && modalDeviceId) refreshDiagnosticsData();
+            if (tabId === 'tab-whitelist' && modalDeviceId) fetchWhitelist();
+            if (tabId === 'tab-mode' && modalDeviceId) fetchMode();
+        }
+        async function openModal(id) { modalDeviceId = id; document.getElementById('modal-dev-id').innerText = id; document.getElementById('device-modal').classList.remove('hidden'); switchTab('tab-signals'); }
+        function closeModal() { document.getElementById('device-modal').classList.add('hidden'); modalDeviceId = null; }
+        
+        async function modalAction(action) { if(!modalDeviceId) return; try { await API.post(`/devices/${modalDeviceId}/${action}`); showToast(`Action successful`, 'success'); } catch(e) { showToast('Error', 'error'); } }
+        function confirmFactoryReset() { if(confirm("Factory reset clears ALL settings. Continue?")) { modalAction('factory_reset'); closeModal(); } }
+        async function modalTriggerBuzzer() { API.post(`/devices/${modalDeviceId}/buzzer`, { sound: parseInt(document.getElementById('modal-buzzer-sound').value), repeat: parseInt(document.getElementById('modal-buzzer-repeat').value) }); showToast('Buzzer command sent', 'info'); }
+        async function modalTriggerLED() { API.post(`/devices/${modalDeviceId}/led`, { mode: parseInt(document.getElementById('modal-led-mode').value), period10ms: parseInt(document.getElementById('modal-led-period').value), duty: parseInt(document.getElementById('modal-led-duty').value), ttl: parseInt(document.getElementById('modal-led-ttl').value) }); showToast('LED command sent', 'info'); }
+        async function modalTriggerRFID() { API.post(`/devices/${modalDeviceId}/auth_response`, { result: parseInt(document.getElementById('modal-rfid-result').value), action: parseInt(document.getElementById('modal-rfid-action').value) }); showToast('Auth response sent', 'info'); }
+        async function fetchMode() {
+            try {
+                const data = await API.get(`/devices/${modalDeviceId}/mode`);
+                if(data) {
+                    document.getElementById('modal-mode-select').value = data.lock_mode || 1;
+                    document.getElementById('modal-dcg-checkbox').checked = (data.behavior_flags & 1) !== 0;
+                    document.getElementById('modal-mode-autoclose').value = data.auto_close_timeout || 3;
+                    document.getElementById('modal-mode-warning').value = data.door_warning_delay_s || 2;
+                    document.getElementById('modal-mode-release').value = data.door_release_delay_s || 5;
+                }
+            } catch(e){}
+        }
+        async function saveLockMode() {
+            try {
+                await API.post(`/devices/${modalDeviceId}/mode`, { lock_mode: parseInt(document.getElementById('modal-mode-select').value), behavior_flags: document.getElementById('modal-dcg-checkbox').checked ? 1 : 0, auto_close_timeout_s: parseInt(document.getElementById('modal-mode-autoclose').value), door_warning_delay_s: parseInt(document.getElementById('modal-mode-warning').value), door_release_delay_s: parseInt(document.getElementById('modal-mode-release').value) });
+                showToast('Mode saved', 'success');
+            } catch(e) { showToast('Error saving mode', 'error'); }
+        }
+        async function fetchWhitelist() {
+            try {
+                await API.get(`/devices/${modalDeviceId}/whitelist`);
+                
+                const tbody = document.getElementById('wl-table-body');
+                tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-center text-gray-500">Loading from CAN Bus...</td></tr>';
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                const data = await API.get(`/devices/${modalDeviceId}/whitelist`);
+                console.log("Whitelist API Response:", data);
+                
+                let html = '';
+                let items = [];
+
+                if (Array.isArray(data)) {
+                    items = data;
+                } else if (data && typeof data === 'object') {
+                    items = Object.keys(data).map(key => {
+                        let item = data[key];
+                        if (!item.slot_index) item.slot_index = key;
+                        return item;
+                    });
+                }
+                
+                if (items.length > 0) {
+                    items.forEach(item => {
+                        html += `<tr>
+                            <td class="px-3 py-2 whitespace-nowrap">${item.slot_index || '--'}</td>
+                            <td class="px-3 py-2 whitespace-nowrap font-mono">${item.uid_hex || '--'}</td>
+                            <td class="px-3 py-2 whitespace-nowrap">${item.ttl_days !== undefined ? item.ttl_days : '--'}</td>
+                            <td class="px-3 py-2 whitespace-nowrap text-xs">Pol: ${item.policy !== undefined ? item.policy : '--'}, Act: ${item.open_action !== undefined ? item.open_action : '--'}</td>
+                            <td class="px-3 py-2 whitespace-nowrap"><button onclick="deleteWlSlot(${item.slot_index})" class="text-red-600 hover:text-red-900 font-medium">Delete</button></td>
+                        </tr>`;
+                    });
+                } else { 
+                    html = '<tr><td colspan="5" class="px-3 py-4 text-center text-gray-500">No entries</td></tr>'; 
+                }
+                tbody.innerHTML = html;
+            } catch(e) {
+                console.error("Fetch Whitelist Error:", e);
+            }
+        }
+        async function addWhitelist() {
+            const slot = parseInt(document.getElementById('wl-slot').value);
+            const uid = document.getElementById('wl-uid').value;
+            if(!uid) return showToast('Enter UID', 'error');
+            try {
+                await API.post(`/devices/${modalDeviceId}/whitelist`, { slot_index: slot, uid_hex: uid, ttl_days: parseInt(document.getElementById('wl-ttl').value) });
+                setTimeout(async () => {
+                    await API.post(`/devices/${modalDeviceId}/whitelist/${slot}/policy`, { policy: parseInt(document.getElementById('wl-policy').value), open_action: parseInt(document.getElementById('wl-action').value), flags: 0 });
+                    showToast('Credential added', 'success'); fetchWhitelist();
+                }, 200);
+            } catch(e) { showToast('Error adding', 'error'); }
+        }
+        async function deleteWlSlot(slot) { if(!confirm(`Delete slot ${slot}?`)) return; await API.delete(`/devices/${modalDeviceId}/whitelist/${slot}`); showToast('Slot deleted', 'info'); setTimeout(fetchWhitelist, 500); }
+        async function wipeWhitelist() { if(!confirm('Wipe ALL whitelist slots on this lock?')) return; await API.delete(`/devices/${modalDeviceId}/whitelist`); showToast('Whitelist cleared', 'info'); setTimeout(fetchWhitelist, 500); }
+        async function refreshDiagnosticsData() {
+            if(!modalDeviceId) return;
+            try {
+                const health = await API.get(`/devices/${modalDeviceId}/health`);
+                if(health.health_short) { document.getElementById('diag-vcc').innerText = (health.health_short.vcc_mv/1000).toFixed(2)+'V'; document.getElementById('diag-temp').innerText = health.health_short.temp_c+'°C'; }
+                if(health.health_extended) { document.getElementById('diag-ram').innerText = health.health_extended.free_ram+' B'; const up = health.health_extended.uptime_s; document.getElementById('diag-uptime').innerText = Math.floor(up/3600)+'h '+Math.floor((up%3600)/60)+'m'; }
+                if(health.health_diag_info) { document.getElementById('diag-watchdog').innerText = health.health_diag_info.watchdog_cnt; document.getElementById('diag-brownout').innerText = health.health_diag_info.brownout_cnt; document.getElementById('diag-can-tx').innerText = health.health_diag_info.can_tx_err; document.getElementById('diag-can-rx').innerText = health.health_diag_info.can_rx_err; document.getElementById('diag-rev').innerText = health.health_diag_info.reset_reason || '--'; }
+                if(health.diag_extended) { document.getElementById('diag-bus-off').innerText = health.diag_extended.bus_off_counter; }
+                
+                API.get(`/devices/${modalDeviceId}/version`).then(ver => { if(ver.firmware_version) document.getElementById('diag-fw').innerText = ver.firmware_version; if(ver.hardware_version) document.getElementById('diag-hw').innerText = ver.hardware_version; }).catch(()=>{});
+                API.get(`/devices/${modalDeviceId}/occupancy`).then(occ => { if(occ) { document.getElementById('diag-occ-flag').innerText = occ.occupied ? 'Yes' : 'No'; document.getElementById('diag-occ-owner').innerText = occ.owner_present ? 'Yes' : 'No'; document.getElementById('diag-occ-counter').innerText = occ.state_counter_24 || '0'; } }).catch(()=>{});
+            } catch(e){}
+        }
+        function refreshDiagnosticsBtn() { refreshDiagnosticsData(); showToast('Diagnostics refresh requested', 'info'); }
+        updateBeaconStatus(); fetchSystem();
+        setInterval(fetchSystem, 2000); setInterval(updateBeaconStatus, 5000);
+    </script>
+
+</body>
+</html>

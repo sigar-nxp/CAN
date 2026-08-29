@@ -153,8 +153,8 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 ### Accessing Interfaces
 
-* **Web Dashboard**: `http://<ip-or-hostname>:8000/`
-* **Interactive OpenAPI Documentation (Swagger)**: `http://<ip-or-hostname>:8000/docs`
+* **Web Dashboard (Commissioning & Testing)**: `http://<ip-or-hostname>:8000/`
+* **Interactive OpenAPI Documentation (REST Integration)**: `http://<ip-or-hostname>:8000/docs`
 
 ---
 

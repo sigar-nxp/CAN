@@ -322,7 +322,7 @@ def request_full_uid(
 def assign_id(
     uid32: bytes,
     new_device_id: int,
-    bitrate_code: int = BITRATE_100K,   #For production change to 50K. This is just for testing with current Test Hardware
+    bitrate_code: int = BITRATE_50K,   #For production change to 50K. This is just for testing with current Test Hardware
     flags: int = 0,
 ) -> CANFrame:
 

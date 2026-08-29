@@ -235,3 +235,15 @@ def device_reset(id: int):
 def factory_reset(id: int):
     lock_service.factory_reset(id)
     return {"status": "factory reset"}
+
+@router.post("/devices/{id}/buzzer_stop")
+def buzzer_stop_device(id: int):
+    from canbus.commands import buzz_stop
+    lock_service.send(buzz_stop(id))
+    return {"status": "buzzer stopped"}
+
+@router.post("/devices/{id}/led_reset")
+def led_reset_device(id: int):
+    from canbus.commands import led_reset
+    lock_service.send(led_reset(id))
+    return {"status": "led reset"}

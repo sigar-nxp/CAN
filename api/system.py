@@ -7,9 +7,11 @@ master beacon broadcast.
 """
 
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
 from datetime import datetime
 import platform
+import os
 
 from config.globals import beacon_service
 
@@ -17,7 +19,13 @@ router = APIRouter(tags=["System"])
 
 
 @router.get("/")
-def root():
+def root(request: Request):
+    if "text/html" in request.headers.get("accept", ""):
+        template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "index.html")
+        if os.path.exists(template_path):
+            with open(template_path, "r", encoding="utf-8") as f:
+                return HTMLResponse(content=f.read())
+                
     return {
         "project": "PS Locks OIP",
         "status": "online"
