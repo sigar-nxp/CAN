@@ -105,7 +105,6 @@ def get_device(id: int):
 
 @router.get("/devices/{id}/health")
 def get_health(id: int):
-    lock_service.request_health(id)
     dev = can_listener.get_device(id)
     if not dev:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -175,7 +174,6 @@ def set_mode(id: int, req: LockModeReq):
 
 @router.get("/devices/{id}/mode")
 def get_mode(id: int):
-    lock_service.request_lock_mode(id)
     dev = can_listener.get_device(id)
     if not dev:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -206,6 +204,10 @@ async def get_whitelist(id: int):
         serialized_item = item.copy()
         uid_parts = serialized_item.get("uid_parts", {})
         serialized_item["uid_parts"] = {k: v.hex() for k, v in uid_parts.items() if isinstance(v, bytes)}
+        # Assemble full uid_hex for display
+        p1 = serialized_item["uid_parts"].get(1, "") or serialized_item["uid_parts"].get("1", "")
+        p2 = serialized_item["uid_parts"].get(2, "") or serialized_item["uid_parts"].get("2", "")
+        serialized_item["uid_hex"] = (p1 + p2).upper()
         serialized_items[slot] = serialized_item
         
     return serialized_items
@@ -218,13 +220,18 @@ def add_whitelist(id: int, req: WhitelistWriteReq):
         raise HTTPException(status_code=400, detail="Invalid hex string for UID")
         
     uid_len = len(uid_bytes)
-    
-    frame1 = wl_write_uid(id, req.slot_index, uid_len, uid_bytes)
+
+    frame1 = wl_write_uid(id, req.slot_index, uid_len, uid_bytes, lock_id=1)
     lock_service.send(frame1)
-    
+
+    import time
+    time.sleep(0.2)
+
     # Always send part 2 to configure ttl_days and part 2 of UIDs, regardless of length
-    frame2 = wl_write_uid_part2(id, uid_bytes, req.ttl_days)
+    frame2 = wl_write_uid_part2(id, uid_bytes, req.ttl_days, lock_id=1)
     lock_service.send(frame2)
+
+    time.sleep(0.2)
         
     return Response(content=json.dumps({"status": "whitelist added"}) + "\n", media_type="application/json")
 

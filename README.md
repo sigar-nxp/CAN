@@ -354,7 +354,9 @@ Queries active whitelist slots from the lock.
 ```json
 {
   "2": {
+    "slot_index": 2,
     "entry_type": 2,
+    "uid_hex": "0A0B0C0D",
     "uid_len": 4,
     "policy": 2,
     "open_action": 2,
@@ -545,7 +547,7 @@ Below is a complete script demonstrating how to discover an unassigned lock, com
 import time
 import requests
 
-GATEWAY_URL = "http://localhost:8000/api"
+GATEWAY_URL = "http://localhost:8000/"
 
 def main():
     # 1. Check Gateway Heartbeat

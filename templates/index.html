@@ -606,16 +606,17 @@
                 console.error("Fetch Whitelist Error:", e);
             }
         }
-        async function addWhitelist() {
+                async function addWhitelist() {
             const slot = parseInt(document.getElementById('wl-slot').value);
             const uid = document.getElementById('wl-uid').value;
             if(!uid) return showToast('Enter UID', 'error');
             try {
                 await API.post(`/devices/${modalDeviceId}/whitelist`, { slot_index: slot, uid_hex: uid, ttl_days: parseInt(document.getElementById('wl-ttl').value) });
-                setTimeout(async () => {
-                    await API.post(`/devices/${modalDeviceId}/whitelist/${slot}/policy`, { policy: parseInt(document.getElementById('wl-policy').value), open_action: parseInt(document.getElementById('wl-action').value), flags: 0 });
-                    showToast('Credential added', 'success'); fetchWhitelist();
-                }, 200);
+                await new Promise(r => setTimeout(r, 250));
+                await API.post(`/devices/${modalDeviceId}/whitelist/${slot}/policy`, { policy: parseInt(document.getElementById('wl-policy').value), open_action: parseInt(document.getElementById('wl-action').value), flags: 0 });
+                await new Promise(r => setTimeout(r, 250));
+                showToast('Credential added', 'success');
+                fetchWhitelist();
             } catch(e) { showToast('Error adding', 'error'); }
         }
         async function deleteWlSlot(slot) { if(!confirm(`Delete slot ${slot}?`)) return; await API.delete(`/devices/${modalDeviceId}/whitelist/${slot}`); showToast('Slot deleted', 'info'); setTimeout(fetchWhitelist, 500); }
