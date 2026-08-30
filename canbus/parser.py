@@ -333,10 +333,10 @@ class CANParser:
                     (data[5] >> 4) & 0x0F, data[5] & 0x0F,
                     data[6]
                 )
-            if sub == STATUS_WL_LIST_V2_UID_PART1 and len(data) >= 8:
-                return WlListV2UidPart1(dev_id, data[3], bytes(data[4:8]))
-            if sub == STATUS_WL_LIST_V2_UID_PART2 and len(data) >= 7:
-                return WlListV2UidPart2(dev_id, data[3], bytes(data[4:7]))
+            if sub == STATUS_WL_LIST_V2_UID_PART1 and len(data) >= 5:
+                return WlListV2UidPart1(dev_id, data[3], bytes(data[4:]))
+            if sub == STATUS_WL_LIST_V2_UID_PART2 and len(data) >= 5:
+                return WlListV2UidPart2(dev_id, data[3], bytes(data[4:]))
             if sub == STATUS_OCCUPANCY_STATE_REPORT and len(data) >= 8:
                 state_cnt = (data[5] << 16) | (data[6] << 8) | data[7]
                 return OccupancyStateReport(dev_id, bool(data[2]), bool(data[3]), data[4], state_cnt)

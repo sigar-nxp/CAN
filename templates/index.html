@@ -570,12 +570,8 @@
         }
         async function fetchWhitelist() {
             try {
-                await API.get(`/devices/${modalDeviceId}/whitelist`);
-                
                 const tbody = document.getElementById('wl-table-body');
                 tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-center text-gray-500">Loading from CAN Bus...</td></tr>';
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
                 const data = await API.get(`/devices/${modalDeviceId}/whitelist`);
                 console.log("Whitelist API Response:", data);
                 

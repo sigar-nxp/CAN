@@ -7,7 +7,10 @@ and configuring physical locks. This includes endpoints for basic actions
 """
 
 
+import asyncio
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
+import json
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
@@ -185,26 +188,45 @@ def get_mode(id: int):
     }
 
 @router.get("/devices/{id}/whitelist")
-def get_whitelist(id: int):
-    lock_service.request_wl_list_v2(id)
+async def get_whitelist(id: int):
     dev = can_listener.get_device(id)
     if not dev:
         raise HTTPException(status_code=404, detail="Device not found")
-    return dev.whitelist_items
+        
+    dev.whitelist_items.clear()
+    lock_service.request_wl_list_v2(id)
+    
+    # Polling wait loop for CAN bus response (up to ~1 second)
+    for _ in range(10):
+        await asyncio.sleep(0.1)
+        
+    # Serialize bytes into hex strings to avoid JSON serialization errors
+    serialized_items = {}
+    for slot, item in dev.whitelist_items.items():
+        serialized_item = item.copy()
+        uid_parts = serialized_item.get("uid_parts", {})
+        serialized_item["uid_parts"] = {k: v.hex() for k, v in uid_parts.items() if isinstance(v, bytes)}
+        serialized_items[slot] = serialized_item
+        
+    return serialized_items
 
 @router.post("/devices/{id}/whitelist")
 def add_whitelist(id: int, req: WhitelistWriteReq):
-    uid_bytes = bytes.fromhex(req.uid_hex)
+    try:
+        uid_bytes = bytes.fromhex(req.uid_hex)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid hex string for UID")
+        
     uid_len = len(uid_bytes)
     
     frame1 = wl_write_uid(id, req.slot_index, uid_len, uid_bytes)
     lock_service.send(frame1)
     
-    if uid_len > 3:
-        frame2 = wl_write_uid_part2(id, uid_bytes, req.ttl_days)
-        lock_service.send(frame2)
+    # Always send part 2 to configure ttl_days and part 2 of UIDs, regardless of length
+    frame2 = wl_write_uid_part2(id, uid_bytes, req.ttl_days)
+    lock_service.send(frame2)
         
-    return {"status": "whitelist added"}
+    return Response(content=json.dumps({"status": "whitelist added"}) + "\n", media_type="application/json")
 
 @router.delete("/devices/{id}/whitelist/{slot_index}")
 def delete_whitelist_slot(id: int, slot_index: int):
