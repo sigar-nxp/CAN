@@ -9,7 +9,9 @@ listener and Master Beacon) via startup/shutdown events.
 from datetime import datetime
 import platform
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+import os
 
 from database.database import Base, engine
 from api.device import router as devices_router
@@ -19,11 +21,24 @@ from config.globals import can_listener, beacon_service
 # Datenbanktabellen erzeugen
 Base.metadata.create_all(bind=engine)
 
+
 app = FastAPI(
     title="PS Locks Open Integration Platform",
     description="Open Integration Platform für Zutrittskontrolle und Gebäudeautomation",
     version="0.3.0"
 )
+
+@app.get("/")
+def root(request: Request):
+    if "text/html" in request.headers.get("accept", ""):
+        template_path = os.path.join(os.path.dirname(__file__), "templates", "index.html")
+        if os.path.exists(template_path):
+            with open(template_path, "r", encoding="utf-8") as f:
+                return HTMLResponse(content=f.read())
+    return {
+        "project": "PS Locks OIP",
+        "status": "online"
+    }
 
 
 @app.on_event("startup")
@@ -52,9 +67,11 @@ def shutdown():
 
 app.include_router(
     devices_router,
+    prefix="/api/v1",
     tags=["Devices"]
 )
 
 app.include_router(
-    system_router
+    system_router,
+    prefix="/api/v1"
 )

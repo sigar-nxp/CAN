@@ -18,20 +18,6 @@ from config.globals import beacon_service
 router = APIRouter(tags=["System"])
 
 
-@router.get("/")
-def root(request: Request):
-    if "text/html" in request.headers.get("accept", ""):
-        template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "index.html")
-        if os.path.exists(template_path):
-            with open(template_path, "r", encoding="utf-8") as f:
-                return HTMLResponse(content=f.read())
-                
-    return {
-        "project": "PS Locks OIP",
-        "status": "online"
-    }
-
-
 @router.get("/health")
 def health():
     return {
@@ -56,7 +42,7 @@ def info():
     }
 
 
-@router.get("/api/system/beacon")
+@router.get("/system/beacon")
 def get_beacon_status():
     """Return current status of the Master Beacon."""
     return {
@@ -66,7 +52,7 @@ def get_beacon_status():
     }
 
 
-@router.post("/api/system/beacon/toggle")
+@router.post("/system/beacon/toggle")
 def toggle_beacon():
     """Enable or disable the Master Beacon dynamically."""
     if beacon_service.running:

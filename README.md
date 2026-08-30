@@ -547,7 +547,7 @@ Below is a complete script demonstrating how to discover an unassigned lock, com
 import time
 import requests
 
-GATEWAY_URL = "http://localhost:8000/"
+GATEWAY_URL = "http://localhost:8000/api/v1/"
 
 def main():
     # 1. Check Gateway Heartbeat

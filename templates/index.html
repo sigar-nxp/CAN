@@ -406,22 +406,22 @@
         }
         async function updateBeaconStatus() {
             try {
-                const status = await API.get('/api/system/beacon');
+                const status = await API.get('/api/v1/system/beacon');
                 const dot = document.getElementById('beacon-status');
                 dot.className = status.running ? 'status-dot bg-blue-500 animate-pulse-slow' : 'status-dot bg-gray-400';
             } catch (e) {}
         }
-        async function toggleBeacon() { try { await API.post('/api/system/beacon/toggle'); updateBeaconStatus(); showToast('Master Beacon toggled', 'success'); } catch (e) { showToast('Failed to toggle beacon', 'error'); } }
+        async function toggleBeacon() { try { await API.post('/api/v1/system/beacon/toggle'); updateBeaconStatus(); showToast('Master Beacon toggled', 'success'); } catch (e) { showToast('Failed to toggle beacon', 'error'); } }
         async function fetchSystem() {
             try {
-                const unRes = await API.get('/unassigned');
+                const unRes = await API.get('/api/v1/unassigned');
                 renderUnassigned(unRes);
-                devices = await API.get('/devices');
+                devices = await API.get('/api/v1/devices');
                 for (const dev of devices) {
                     if (dev.online) {
                         try {
-                            const details = await API.get(`/devices/${dev.device_id}`);
-                            const health = await API.get(`/devices/${dev.device_id}/health`);
+                            const details = await API.get(`/api/v1/devices/${dev.device_id}`);
+                            const health = await API.get(`/api/v1/devices/${dev.device_id}/health`);
                             renderLockerCard(dev.device_id, details, health);
 
                             if (previousScannedCard[dev.device_id] !== details.last_scanned_card) {
@@ -460,7 +460,7 @@
         }
         async function assignDevice(uid32, deviceId) {
             if (!deviceId || deviceId < 1 || deviceId > 127) return showToast('Invalid Device ID', 'error');
-            try { await API.post('/devices/assign', { uid32: parseInt(uid32), device_id: parseInt(deviceId), bitrate_code: 4 }); showToast(`Assigned ID ${deviceId}`, 'success'); } catch (e) { showToast('Assignment failed', 'error'); }
+            try { await API.post('/api/v1/devices/assign', { uid32: parseInt(uid32), device_id: parseInt(deviceId), bitrate_code: 4 }); showToast(`Assigned ID ${deviceId}`, 'success'); } catch (e) { showToast('Assignment failed', 'error'); }
         }
         function renderLockerCard(id, details, health) {
             const grid = document.getElementById('locker-grid');
@@ -498,17 +498,17 @@
                 grid.appendChild(card);
             } else if (card.innerHTML !== innerHTML) { card.innerHTML = innerHTML; }
         }
-        async function deviceAction(id, action) { try { await API.post(`/devices/${id}/${action}`); showToast(`Action '${action}' sent to Lock ${id}`, 'success'); } catch (e) { showToast('Action failed', 'error'); } }
+        async function deviceAction(id, action) { try { await API.post(`/api/v1/devices/${id}/${action}`); showToast(`Action '${action}' sent to Lock ${id}`, 'success'); } catch (e) { showToast('Action failed', 'error'); } }
         async function globalAction(action) {
             if (devices.length === 0) return; showToast(`Broadcasting ${action}...`, 'info');
-            devices.forEach(d => { if(d.online) API.post(`/devices/${d.device_id}/${action}`).catch(()=>{}); });
+            devices.forEach(d => { if(d.online) API.post(`/api/v1/devices/${d.device_id}/${action}`).catch(()=>{}); });
         }
         async function globalBuzzer(sound, repeat) {
-            devices.forEach(d => { if(d.online) API.post(`/devices/${d.device_id}/buzzer`, { sound, repeat }).catch(()=>{}); });
+            devices.forEach(d => { if(d.online) API.post(`/api/v1/devices/${d.device_id}/buzzer`, { sound, repeat }).catch(()=>{}); });
             showToast('Global Buzzer signal sent', 'success');
         }
         async function globalLED(mode, period10ms, duty, ttl) {
-            devices.forEach(d => { if(d.online) API.post(`/devices/${d.device_id}/led`, { mode, period10ms, duty, ttl }).catch(()=>{}); });
+            devices.forEach(d => { if(d.online) API.post(`/api/v1/devices/${d.device_id}/led`, { mode, period10ms, duty, ttl }).catch(()=>{}); });
             showToast('Global LED signal sent', 'success');
         }
         async function globalMasterCard() {
@@ -517,15 +517,15 @@
             const ttl = parseInt(document.getElementById('global-master-ttl').value) || 0;
             devices.forEach(d => {
                 if(d.online) {
-                    API.post(`/devices/${d.device_id}/whitelist`, { slot_index: 2, uid_hex: uidHex, ttl_days: ttl })
-                    .then(() => API.post(`/devices/${d.device_id}/whitelist/2/policy`, { policy: 2, open_action: 2, flags: 0 })).catch(()=>{});
+                    API.post(`/api/v1/devices/${d.device_id}/whitelist`, { slot_index: 2, uid_hex: uidHex, ttl_days: ttl })
+                    .then(() => API.post(`/api/v1/devices/${d.device_id}/whitelist/2/policy`, { policy: 2, open_action: 2, flags: 0 })).catch(()=>{});
                 }
             });
             showToast('Master card sync initiated', 'info');
         }
         async function globalWhitelistWipe() {
             if(!confirm("WIPE whitelist for ALL active locks?")) return;
-            devices.forEach(d => { if(d.online) API.delete(`/devices/${d.device_id}/whitelist`).catch(()=>{}); });
+            devices.forEach(d => { if(d.online) API.delete(`/api/v1/devices/${d.device_id}/whitelist`).catch(()=>{}); });
             showToast('Global wipe initiated', 'warning');
         }
         function switchTab(tabId) {
@@ -545,14 +545,14 @@
         async function openModal(id) { modalDeviceId = id; document.getElementById('modal-dev-id').innerText = id; document.getElementById('device-modal').classList.remove('hidden'); switchTab('tab-signals'); }
         function closeModal() { document.getElementById('device-modal').classList.add('hidden'); modalDeviceId = null; }
         
-        async function modalAction(action) { if(!modalDeviceId) return; try { await API.post(`/devices/${modalDeviceId}/${action}`); showToast(`Action successful`, 'success'); } catch(e) { showToast('Error', 'error'); } }
+        async function modalAction(action) { if(!modalDeviceId) return; try { await API.post(`/api/v1/devices/${modalDeviceId}/${action}`); showToast(`Action successful`, 'success'); } catch(e) { showToast('Error', 'error'); } }
         function confirmFactoryReset() { if(confirm("Factory reset clears ALL settings. Continue?")) { modalAction('factory_reset'); closeModal(); } }
-        async function modalTriggerBuzzer() { API.post(`/devices/${modalDeviceId}/buzzer`, { sound: parseInt(document.getElementById('modal-buzzer-sound').value), repeat: parseInt(document.getElementById('modal-buzzer-repeat').value) }); showToast('Buzzer command sent', 'info'); }
-        async function modalTriggerLED() { API.post(`/devices/${modalDeviceId}/led`, { mode: parseInt(document.getElementById('modal-led-mode').value), period10ms: parseInt(document.getElementById('modal-led-period').value), duty: parseInt(document.getElementById('modal-led-duty').value), ttl: parseInt(document.getElementById('modal-led-ttl').value) }); showToast('LED command sent', 'info'); }
-        async function modalTriggerRFID() { API.post(`/devices/${modalDeviceId}/auth_response`, { result: parseInt(document.getElementById('modal-rfid-result').value), action: parseInt(document.getElementById('modal-rfid-action').value) }); showToast('Auth response sent', 'info'); }
+        async function modalTriggerBuzzer() { API.post(`/api/v1/devices/${modalDeviceId}/buzzer`, { sound: parseInt(document.getElementById('modal-buzzer-sound').value), repeat: parseInt(document.getElementById('modal-buzzer-repeat').value) }); showToast('Buzzer command sent', 'info'); }
+        async function modalTriggerLED() { API.post(`/api/v1/devices/${modalDeviceId}/led`, { mode: parseInt(document.getElementById('modal-led-mode').value), period10ms: parseInt(document.getElementById('modal-led-period').value), duty: parseInt(document.getElementById('modal-led-duty').value), ttl: parseInt(document.getElementById('modal-led-ttl').value) }); showToast('LED command sent', 'info'); }
+        async function modalTriggerRFID() { API.post(`/api/v1/devices/${modalDeviceId}/auth_response`, { result: parseInt(document.getElementById('modal-rfid-result').value), action: parseInt(document.getElementById('modal-rfid-action').value) }); showToast('Auth response sent', 'info'); }
         async function fetchMode() {
             try {
-                const data = await API.get(`/devices/${modalDeviceId}/mode`);
+                const data = await API.get(`/api/v1/devices/${modalDeviceId}/mode`);
                 if(data) {
                     document.getElementById('modal-mode-select').value = data.lock_mode || 1;
                     document.getElementById('modal-dcg-checkbox').checked = (data.behavior_flags & 1) !== 0;
@@ -564,7 +564,7 @@
         }
         async function saveLockMode() {
             try {
-                await API.post(`/devices/${modalDeviceId}/mode`, { lock_mode: parseInt(document.getElementById('modal-mode-select').value), behavior_flags: document.getElementById('modal-dcg-checkbox').checked ? 1 : 0, auto_close_timeout_s: parseInt(document.getElementById('modal-mode-autoclose').value), door_warning_delay_s: parseInt(document.getElementById('modal-mode-warning').value), door_release_delay_s: parseInt(document.getElementById('modal-mode-release').value) });
+                await API.post(`/api/v1/devices/${modalDeviceId}/mode`, { lock_mode: parseInt(document.getElementById('modal-mode-select').value), behavior_flags: document.getElementById('modal-dcg-checkbox').checked ? 1 : 0, auto_close_timeout_s: parseInt(document.getElementById('modal-mode-autoclose').value), door_warning_delay_s: parseInt(document.getElementById('modal-mode-warning').value), door_release_delay_s: parseInt(document.getElementById('modal-mode-release').value) });
                 showToast('Mode saved', 'success');
             } catch(e) { showToast('Error saving mode', 'error'); }
         }
@@ -572,7 +572,7 @@
             try {
                 const tbody = document.getElementById('wl-table-body');
                 tbody.innerHTML = '<tr><td colspan="5" class="px-3 py-4 text-center text-gray-500">Loading from CAN Bus...</td></tr>';
-                const data = await API.get(`/devices/${modalDeviceId}/whitelist`);
+                const data = await API.get(`/api/v1/devices/${modalDeviceId}/whitelist`);
                 console.log("Whitelist API Response:", data);
                 
                 let html = '';
@@ -611,27 +611,27 @@
             const uid = document.getElementById('wl-uid').value;
             if(!uid) return showToast('Enter UID', 'error');
             try {
-                await API.post(`/devices/${modalDeviceId}/whitelist`, { slot_index: slot, uid_hex: uid, ttl_days: parseInt(document.getElementById('wl-ttl').value) });
+                await API.post(`/api/v1/devices/${modalDeviceId}/whitelist`, { slot_index: slot, uid_hex: uid, ttl_days: parseInt(document.getElementById('wl-ttl').value) });
                 await new Promise(r => setTimeout(r, 250));
-                await API.post(`/devices/${modalDeviceId}/whitelist/${slot}/policy`, { policy: parseInt(document.getElementById('wl-policy').value), open_action: parseInt(document.getElementById('wl-action').value), flags: 0 });
+                await API.post(`/api/v1/devices/${modalDeviceId}/whitelist/${slot}/policy`, { policy: parseInt(document.getElementById('wl-policy').value), open_action: parseInt(document.getElementById('wl-action').value), flags: 0 });
                 await new Promise(r => setTimeout(r, 250));
                 showToast('Credential added', 'success');
                 fetchWhitelist();
             } catch(e) { showToast('Error adding', 'error'); }
         }
-        async function deleteWlSlot(slot) { if(!confirm(`Delete slot ${slot}?`)) return; await API.delete(`/devices/${modalDeviceId}/whitelist/${slot}`); showToast('Slot deleted', 'info'); setTimeout(fetchWhitelist, 500); }
-        async function wipeWhitelist() { if(!confirm('Wipe ALL whitelist slots on this lock?')) return; await API.delete(`/devices/${modalDeviceId}/whitelist`); showToast('Whitelist cleared', 'info'); setTimeout(fetchWhitelist, 500); }
+        async function deleteWlSlot(slot) { if(!confirm(`Delete slot ${slot}?`)) return; await API.delete(`/api/v1/devices/${modalDeviceId}/whitelist/${slot}`); showToast('Slot deleted', 'info'); setTimeout(fetchWhitelist, 500); }
+        async function wipeWhitelist() { if(!confirm('Wipe ALL whitelist slots on this lock?')) return; await API.delete(`/api/v1/devices/${modalDeviceId}/whitelist`); showToast('Whitelist cleared', 'info'); setTimeout(fetchWhitelist, 500); }
         async function refreshDiagnosticsData() {
             if(!modalDeviceId) return;
             try {
-                const health = await API.get(`/devices/${modalDeviceId}/health`);
+                const health = await API.get(`/api/v1/devices/${modalDeviceId}/health`);
                 if(health.health_short) { document.getElementById('diag-vcc').innerText = (health.health_short.vcc_mv/1000).toFixed(2)+'V'; document.getElementById('diag-temp').innerText = health.health_short.temp_c+'°C'; }
                 if(health.health_extended) { document.getElementById('diag-ram').innerText = health.health_extended.free_ram+' B'; const up = health.health_extended.uptime_s; document.getElementById('diag-uptime').innerText = Math.floor(up/3600)+'h '+Math.floor((up%3600)/60)+'m'; }
                 if(health.health_diag_info) { document.getElementById('diag-watchdog').innerText = health.health_diag_info.watchdog_cnt; document.getElementById('diag-brownout').innerText = health.health_diag_info.brownout_cnt; document.getElementById('diag-can-tx').innerText = health.health_diag_info.can_tx_err; document.getElementById('diag-can-rx').innerText = health.health_diag_info.can_rx_err; document.getElementById('diag-rev').innerText = health.health_diag_info.reset_reason || '--'; }
                 if(health.diag_extended) { document.getElementById('diag-bus-off').innerText = health.diag_extended.bus_off_counter; }
                 
-                API.get(`/devices/${modalDeviceId}/version`).then(ver => { if(ver.firmware_version) document.getElementById('diag-fw').innerText = ver.firmware_version; if(ver.hardware_version) document.getElementById('diag-hw').innerText = ver.hardware_version; }).catch(()=>{});
-                API.get(`/devices/${modalDeviceId}/occupancy`).then(occ => { if(occ) { document.getElementById('diag-occ-flag').innerText = occ.occupied ? 'Yes' : 'No'; document.getElementById('diag-occ-owner').innerText = occ.owner_present ? 'Yes' : 'No'; document.getElementById('diag-occ-counter').innerText = occ.state_counter_24 || '0'; } }).catch(()=>{});
+                API.get(`/api/v1/devices/${modalDeviceId}/version`).then(ver => { if(ver.firmware_version) document.getElementById('diag-fw').innerText = ver.firmware_version; if(ver.hardware_version) document.getElementById('diag-hw').innerText = ver.hardware_version; }).catch(()=>{});
+                API.get(`/api/v1/devices/${modalDeviceId}/occupancy`).then(occ => { if(occ) { document.getElementById('diag-occ-flag').innerText = occ.occupied ? 'Yes' : 'No'; document.getElementById('diag-occ-owner').innerText = occ.owner_present ? 'Yes' : 'No'; document.getElementById('diag-occ-counter').innerText = occ.state_counter_24 || '0'; } }).catch(()=>{});
             } catch(e){}
         }
         function refreshDiagnosticsBtn() { refreshDiagnosticsData(); showToast('Diagnostics refresh requested', 'info'); }
