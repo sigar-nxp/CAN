@@ -53,45 +53,48 @@
                         <button onclick="globalAction('reset')" class="bg-gray-700 hover:bg-gray-800 text-white text-sm font-medium py-1.5 px-3 rounded shadow-sm">Lock / Reset All</button>
                     </div>
                 </div>
-                <!-- Global Signals -->
+                <!-- Global Operation Mode -->
                 <div class="bg-gray-50 rounded p-4 border border-gray-100 flex flex-col">
-                    <h4 class="text-xs font-bold text-gray-600 mb-4">Global Signals Broadcast</h4>
-                    <div class="flex flex-col space-y-4 mt-auto">
-                        
-                        <!-- Buzzer Group -->
-                        <div>
-                            <span class="block text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">Buzzer</span>
-                            <div class="flex space-x-2">
-                                <button onclick="globalBuzzer(4, 5)" class="flex-1 bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Alarm Test</button>
-                                <button onclick="globalAction('buzzer_stop')" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Stop</button>
-                            </div>
+                    <h4 class="text-xs font-bold text-gray-600 mb-3">Global Operation Mode</h4>
+                    <div class="flex flex-col space-y-2 mt-auto text-sm">
+                        <select id="global-op-mode" class="border border-gray-300 rounded shadow-sm py-1.5 px-2 text-xs w-full focus:outline-none focus:ring-1 focus:ring-indigo-500">
+                            <option value="1">Mode 1: Locker (Default OPEN)</option>
+                            <option value="2">Mode 2: Access Door (Default CLOSED)</option>
+                        </select>
+                        <label class="flex items-center space-x-2 text-xs text-gray-700 mt-1">
+                            <input type="checkbox" id="global-door-guard" class="rounded border-gray-300 text-indigo-600 shadow-sm focus:ring-indigo-500">
+                            <span>Enable Door Close Guard</span>
+                        </label>
+                        <div class="flex items-center justify-between mt-1">
+                            <span class="text-xs text-gray-600">Auto Close Timeout (s):</span>
+                            <input type="number" id="global-timeout" value="3" class="w-16 border border-gray-300 rounded shadow-sm py-1 px-2 text-xs text-center focus:outline-none focus:ring-1 focus:ring-indigo-500">
                         </div>
-                        
-                        <!-- LED Group -->
-                        <div>
-                            <span class="block text-[10px] uppercase tracking-wider text-gray-400 mb-1.5">LED Overrides</span>
-                            <div class="flex space-x-2 mb-2">
-                                <button onclick="globalLED(1, 0, 0, 10)" class="flex-1 bg-green-600 hover:bg-green-700 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Green</button>
-                                <button onclick="globalLED(4, 50, 50, 10)" class="flex-1 bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Red Blink</button>
-                            </div>
-                            <button onclick="globalAction('led_reset')" class="w-full bg-gray-600 hover:bg-gray-700 text-white text-xs font-medium py-1.5 px-2 rounded shadow-sm transition-colors">Reset LEDs</button>
-                        </div>
-                        
+                        <button onclick="globalSetMode()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium py-2 rounded shadow-sm mt-2 w-full transition-colors">Apply Mode to All Locks</button>
                     </div>
                 </div>
-                <!-- Master Card Sync -->
+                <!-- Global Signals & Diagnostics -->
                 <div class="bg-gray-50 rounded p-4 border border-gray-100 flex flex-col">
-                    <h4 class="text-xs font-bold text-gray-600 mb-3">Master Card Sync (Slot 2)</h4>
+                    <h4 class="text-xs font-bold text-gray-600 mb-3">Global Signals & Diagnostics</h4>
                     <div class="flex flex-col space-y-2 mt-auto">
-                        <input type="text" id="global-master-uid" placeholder="UID Hex (e.g. AABBCCDD)" class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        <input type="number" id="global-master-ttl" placeholder="TTL Days (0 = forever)" class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        <button onclick="globalMasterCard()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium py-1.5 px-3 rounded shadow-sm">Sync to All Locks</button>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button onclick="globalBuzzer(4, 5)" class="bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">Alarm Test</button>
+                            <button onclick="globalAction('buzzer_stop')" class="bg-gray-600 hover:bg-gray-700 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">Stop</button>
+                            <button onclick="globalLED(1, 0, 0, 10)" class="bg-green-600 hover:bg-green-700 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">Green</button>
+                            <button onclick="globalLED(4, 50, 50, 10)" class="bg-red-500 hover:bg-red-600 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">Red Blink</button>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 mt-1">
+                            <button onclick="globalAction('led_reset')" class="bg-gray-600 hover:bg-gray-700 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">Reset LEDs</button>
+                            <button onclick="globalRefreshDiagnostics()" class="bg-teal-600 hover:bg-teal-700 text-white text-xs font-medium py-1.5 rounded shadow-sm transition-colors">Refresh All Diags</button>
+                        </div>
                     </div>
                 </div>
-                <!-- Emergency -->
-                <div class="bg-gray-50 rounded p-4 border border-gray-100 flex flex-col justify-between">
-                    <h4 class="text-xs font-bold text-gray-600 mb-3">Emergency & Security</h4>
-                    <button onclick="globalWhitelistWipe()" class="w-full bg-red-700 hover:bg-red-800 text-white text-sm font-medium py-2 px-3 rounded shadow-sm">Global Whitelist Wipe</button>
+                <!-- Emergency & Maintenance -->
+                <div class="bg-gray-50 rounded p-4 border border-gray-100 flex flex-col border-l-4 border-l-red-500">
+                    <h4 class="text-xs font-bold text-red-600 mb-3">Emergency & Maintenance</h4>
+                    <div class="flex flex-col space-y-2 mt-auto">
+                        <button onclick="if(confirm('Are you sure you want to wipe ALL whitelist slots on ALL online locks? This cannot be undone.')) globalWhitelistWipe()" class="w-full bg-red-700 hover:bg-red-800 text-white text-sm font-medium py-2 px-3 rounded shadow-sm transition-colors">Global Whitelist Wipe</button>
+                        <button onclick="globalRebootAll()" class="w-full bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium py-2 px-3 rounded shadow-sm transition-colors">Reboot All Devices</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -523,11 +526,38 @@
                     <h3 class="text-lg font-bold ${headerText}">Lock ${id}</h3><span class="text-xs font-semibold px-2 py-1 rounded-full ${labelClass}">${statusLabel}</span>
                 </div>
                 <div class="p-4 flex-1 flex flex-col space-y-3 bg-white rounded-b-lg">
-                    <div class="grid grid-cols-2 gap-2 text-sm">
-                        <div class="bg-gray-50 p-2 rounded flex justify-between border"><span class="text-gray-500">Bolt</span><span class="font-medium ${isLocked ? 'text-red-600' : 'text-green-600'}">${isLocked ? 'Bolted' : 'Retracted'}</span></div>
-                        <div class="bg-gray-50 p-2 rounded flex justify-between border"><span class="text-gray-500">Door</span><span class="font-medium ${isClosed ? 'text-green-600' : 'text-yellow-600'}">${isClosed ? 'Closed' : 'Open'}</span></div>
-                        <div class="bg-gray-50 p-2 rounded flex justify-between border"><span class="text-gray-500">RFID</span><span class="font-mono text-xs font-medium text-gray-700">${details.last_scanned_card || 'None'}</span></div>
-                        <div class="bg-gray-50 p-2 rounded flex justify-between border"><span class="text-gray-500">VCC/Tmp</span><span class="font-mono text-xs font-medium text-gray-700">${vcc} | ${temp}</span></div>
+                    <div class="space-y-2 text-sm">
+                        <!-- Row 1: Actuator & Door State -->
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="bg-gray-50 p-2 rounded flex justify-between items-center border">
+                                <span class="text-xs text-gray-500 font-medium">Bolt</span>
+                                <span class="text-xs font-semibold ${isLocked ? 'text-red-600' : 'text-green-600'}">${isLocked ? 'Bolted' : 'Retracted'}</span>
+                            </div>
+                            <div class="bg-gray-50 p-2 rounded flex justify-between items-center border">
+                                <span class="text-xs text-gray-500 font-medium">Door</span>
+                                <span class="text-xs font-semibold ${isClosed ? 'text-green-600' : 'text-yellow-600'}">${isClosed ? 'Closed' : 'Open'}</span>
+                            </div>
+                        </div>
+
+                        <!-- Row 2: Telemetry VCC & Temp -->
+                        <div class="grid grid-cols-2 gap-2">
+                            <div class="bg-gray-50 p-2 rounded flex justify-between items-center border">
+                                <span class="text-xs text-gray-500 font-medium">VCC</span>
+                                <span class="font-mono text-xs font-semibold text-gray-800">${vcc}</span>
+                            </div>
+                            <div class="bg-gray-50 p-2 rounded flex justify-between items-center border">
+                                <span class="text-xs text-gray-500 font-medium">Temp</span>
+                                <span class="font-mono text-xs font-semibold text-gray-800">${temp}</span>
+                            </div>
+                        </div>
+
+                        <!-- Row 3: Scanned RFID Card (Full Width) -->
+                        <div class="bg-gray-50 p-2 rounded flex justify-between items-center border overflow-hidden">
+                            <span class="text-xs text-gray-500 font-medium whitespace-nowrap mr-2">RFID</span>
+                            <span class="font-mono text-xs font-semibold text-gray-700 truncate" title="${details.last_scanned_card || 'None'}">
+                                ${details.last_scanned_card || 'None'}
+                            </span>
+                        </div>
                     </div>
                     <div class="grid grid-cols-3 gap-2 mt-2">
                         <button onclick="deviceAction(${id}, 'open')" class="bg-blue-50 hover:bg-blue-100 text-blue-700 py-1.5 px-2 rounded border border-blue-200 text-xs font-medium">Open Pulse</button>
@@ -557,20 +587,49 @@
             devices.forEach(d => { if(d.online) API.post(`/api/v1/devices/${d.device_id}/led`, { mode, period10ms, duty, ttl }).catch(()=>{}); });
             showToast('Global LED signal sent', 'success');
         }
-        async function globalMasterCard() {
-            const uidHex = document.getElementById('global-master-uid').value;
-            if(!uidHex) return showToast('Enter UID', 'error');
-            const ttl = parseInt(document.getElementById('global-master-ttl').value) || 0;
-            devices.forEach(d => {
+        async function globalSetMode() {
+            const mode = parseInt(document.getElementById('global-op-mode').value);
+            const guard = document.getElementById('global-door-guard').checked ? 1 : 0;
+            const timeout = parseInt(document.getElementById('global-timeout').value) || 3;
+            let success = 0, fail = 0;
+            for(let d of devices) {
                 if(d.online) {
-                    API.post(`/api/v1/devices/${d.device_id}/whitelist`, { slot_index: 2, uid_hex: uidHex, ttl_days: ttl })
-                    .then(() => API.post(`/api/v1/devices/${d.device_id}/whitelist/2/policy`, { policy: 2, open_action: 2, flags: 0 })).catch(()=>{});
+                    try {
+                        await API.post(`/api/v1/devices/${d.device_id}/mode`, { lock_mode: mode, behavior_flags: guard, auto_close_timeout_s: timeout });
+                        success++;
+                    } catch(e) { fail++; }
+                    await new Promise(r => setTimeout(r, 100));
                 }
-            });
-            showToast('Master card sync initiated', 'info');
+            }
+            showToast(`Mode applied: ${success} OK, ${fail} Fail`, success ? 'success' : 'error');
+        }
+        async function globalRefreshDiagnostics() {
+            let count = 0;
+            for(let d of devices) {
+                if(d.online) {
+                    try {
+                        await API.get(`/api/v1/devices/${d.device_id}/health`);
+                        count++;
+                    } catch(e) {}
+                }
+            }
+            showToast(`Diagnostics refreshed for ${count} devices`, 'info');
+        }
+        async function globalRebootAll() {
+            if(!confirm('Are you sure you want to reboot ALL online devices?')) return;
+            let success = 0, fail = 0;
+            for(let d of devices) {
+                if(d.online) {
+                    try {
+                        await API.post(`/api/v1/devices/${d.device_id}/device_reset`);
+                        success++;
+                    } catch(e) { fail++; }
+                    await new Promise(r => setTimeout(r, 100));
+                }
+            }
+            showToast(`Reboot broadcast: ${success} OK, ${fail} Fail`, success ? 'success' : 'error');
         }
         async function globalWhitelistWipe() {
-            if(!confirm("WIPE whitelist for ALL active locks?")) return;
             devices.forEach(d => { if(d.online) API.delete(`/api/v1/devices/${d.device_id}/whitelist`).catch(()=>{}); });
             showToast('Global wipe initiated', 'warning');
         }
