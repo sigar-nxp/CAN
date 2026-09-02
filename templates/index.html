@@ -412,33 +412,79 @@
             } catch (e) {}
         }
         async function toggleBeacon() { try { await API.post('/api/v1/system/beacon/toggle'); updateBeaconStatus(); showToast('Master Beacon toggled', 'success'); } catch (e) { showToast('Failed to toggle beacon', 'error'); } }
-        async function fetchSystem() {
-            try {
-                const unRes = await API.get('/api/v1/unassigned');
-                renderUnassigned(unRes);
-                devices = await API.get('/api/v1/devices');
-                for (const dev of devices) {
-                    if (dev.online) {
-                        try {
-                            const details = await API.get(`/api/v1/devices/${dev.device_id}`);
-                            const health = await API.get(`/api/v1/devices/${dev.device_id}/health`);
-                            renderLockerCard(dev.device_id, details, health);
+        function setupSSE() {
+            if (window.eventSource) {
+                window.eventSource.close();
+            }
+            
+            window.eventSource = new EventSource('/api/v1/stream');
+            
+            window.eventSource.onopen = function() {
+                console.log("SSE Connection opened.");
+            };
+            
+            window.eventSource.addEventListener('device_update', function(e) {
+                try {
+                    const data = JSON.parse(e.data);
+                    
+                    // Update devices array for bulk actions
+                    const existingIdx = devices.findIndex(d => d.device_id === data.device_id);
+                    if (existingIdx !== -1) {
+                        devices[existingIdx] = data;
+                    } else {
+                        devices.push(data);
+                    }
+                    
+                    // Re-render card
+                    if (data.online) {
+                        renderLockerCard(data.device_id, data.details, data.health);
+                        
+                        // Check auto-reply
+                        if (previousScannedCard[data.device_id] !== data.details.last_scanned_card) {
+                            previousScannedCard[data.device_id] = data.details.last_scanned_card;
 
-                            if (previousScannedCard[dev.device_id] !== details.last_scanned_card) {
-                                previousScannedCard[dev.device_id] = details.last_scanned_card;
-                                
-                                if (modalDeviceId === dev.device_id && document.getElementById('modal-rfid-auto')?.checked) {
-                                    if (details.last_scanned_card !== "None" && details.last_scanned_card !== null) {
-                                        showToast("Auto-Reply triggered!", "info");
-                                        modalTriggerRFID();
-                                    }
+                            if (modalDeviceId === data.device_id && document.getElementById('modal-rfid-auto')?.checked) {
+                                if (data.details.last_scanned_card !== "None" && data.details.last_scanned_card !== null) {
+                                    showToast("Auto-Reply triggered!", "info");
+                                    modalTriggerRFID();
                                 }
                             }
-                        } catch (e) {}
+                        }
                     }
+                    
+                    // Refresh diagnostics if modal open
+                    if (modalDeviceId === data.device_id && activeTab === 'tab-diagnostics') {
+                        refreshDiagnosticsData();
+                    }
+                } catch(err) {
+                    console.error("Error processing device_update", err);
                 }
-                if (modalDeviceId && activeTab === 'tab-diagnostics') refreshDiagnosticsData();
-            } catch (e) {}
+            });
+            
+            window.eventSource.addEventListener('unassigned_update', function(e) {
+                try {
+                    const data = JSON.parse(e.data);
+                    renderUnassigned(data);
+                } catch(err) {
+                    console.error("Error processing unassigned_update", err);
+                }
+            });
+            
+            window.eventSource.addEventListener('beacon_update', function(e) {
+                try {
+                    const data = JSON.parse(e.data);
+                    const dot = document.getElementById('beacon-status');
+                    dot.className = data.running ? 'status-dot bg-blue-500 animate-pulse-slow' : 'status-dot bg-gray-400';
+                } catch(err) {
+                    console.error("Error processing beacon_update", err);
+                }
+            });
+            
+            window.eventSource.onerror = function(e) {
+                console.error("SSE Connection error. Retrying in 3 seconds...");
+                window.eventSource.close();
+                setTimeout(setupSSE, 3000);
+            };
         }
         function renderUnassigned(list) {
             const banner = document.getElementById('unassigned-banner');
@@ -635,8 +681,7 @@
             } catch(e){}
         }
         function refreshDiagnosticsBtn() { refreshDiagnosticsData(); showToast('Diagnostics refresh requested', 'info'); }
-        updateBeaconStatus(); fetchSystem();
-        setInterval(fetchSystem, 2000); setInterval(updateBeaconStatus, 5000);
+        setupSSE();
     </script>
 
 </body>
