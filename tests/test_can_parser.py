@@ -33,12 +33,13 @@ class TestCANParser(unittest.TestCase):
         self.assertEqual(result.temp_c, 30)
 
     def test_parse_health_extended(self):
+        # Big-endian test payload: 0x0400 = 1024 RAM, 0x00015180 = 86400 uptime
         frame = CANFrame(arbitration_id=CAN_HEALTH | 20, data=bytes([HEALTH_EXTENDED, 0x04, 0x00, 0x00, 0x01, 0x51, 0x80]))
         result = self.parser.parse(frame)
         self.assertIsInstance(result, HealthExtended)
         self.assertEqual(result.device_id, 20)
-        self.assertEqual(result.free_ram, 1024) # 0x0400
-        self.assertEqual(result.uptime_s, 86400) # 0x00015180
+        self.assertEqual(result.free_ram, 1024)
+        self.assertEqual(result.uptime_s, 86400)
 
     def test_parse_health_version(self):
         frame = CANFrame(arbitration_id=CAN_HEALTH | 25, data=bytes([HEALTH_VERSION, 1, 2, 3]))

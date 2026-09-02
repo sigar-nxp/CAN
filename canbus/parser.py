@@ -6,6 +6,7 @@ representing status updates, telemetry, whitelist synchronization data,
 and health information.
 """
 
+import struct
 from dataclasses import dataclass
 
 from .protocol import CANFrame
@@ -362,8 +363,8 @@ class CANParser:
                         temp -= 256
                     return HealthShort(device_id=dev_id, vcc_mv=vcc, temp_c=temp)
                 elif sub == HEALTH_EXTENDED and len(data) >= 7:
-                    ram = (data[1] << 8) | data[2]
-                    uptime = (data[3] << 24) | (data[4] << 16) | (data[5] << 8) | data[6]
+                    ram = struct.unpack(">H", data[1:3])[0]
+                    uptime = struct.unpack(">I", data[3:7])[0]
                     return HealthExtended(device_id=dev_id, free_ram=ram, uptime_s=uptime)
                 elif sub == HEALTH_VERSION and len(data) >= 4:
                     version_str = f"{data[1]}.{data[2]}.{data[3]}"

@@ -133,7 +133,7 @@
                     </div>
                     
                     <!-- Tabs Navigation -->
-                    <div class="border-b border-gray-200 mb-4 overflow-x-auto">
+                    <div class="border-b border-gray-200 mb-4 overflow-x-auto overflow-y-hidden">
                         <nav class="-mb-px flex space-x-8" aria-label="Tabs">
                             <button onclick="switchTab('tab-signals')" id="nav-tab-signals" class="tab-link border-indigo-500 text-indigo-600 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">Signals & Overrides</button>
                             <button onclick="switchTab('tab-mode')" id="nav-tab-mode" class="tab-link border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm">Operation Mode</button>
@@ -221,6 +221,13 @@
 
                     <!-- Tab 2: Mode -->
                     <div class="tab-content" id="tab-mode">
+                        <div class="max-w-xl mx-auto mb-4 p-3 bg-white border rounded-md shadow-sm flex items-center justify-between">
+                            <div class="flex items-center">
+                                <span class="text-sm font-medium text-gray-700 mr-2">Active Config:</span>
+                                <span id="current-mode-badge" class="px-2.5 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800">Unknown</span>
+                                <span id="current-mode-summary" class="text-xs text-gray-500 ml-2"></span>
+                            </div>
+                        </div>
                         <div class="max-w-xl mx-auto border rounded p-6 bg-gray-50">
                             <h4 class="font-bold text-gray-800 mb-4 border-b pb-2">Lock Operation Parameters</h4>
                             <div class="space-y-4">
@@ -608,6 +615,8 @@
             for(let d of devices) {
                 if(d.online) {
                     try {
+                        await API.post(`/api/v1/devices/${d.device_id}/request_health`);
+                        await new Promise(r => setTimeout(r, 500));
                         await API.get(`/api/v1/devices/${d.device_id}/health`);
                         count++;
                     } catch(e) {}
@@ -664,6 +673,26 @@
                     document.getElementById('modal-mode-autoclose').value = data.auto_close_timeout || 3;
                     document.getElementById('modal-mode-warning').value = data.door_warning_delay_s || 2;
                     document.getElementById('modal-mode-release').value = data.door_release_delay_s || 5;
+
+                    const badge = document.getElementById('current-mode-badge');
+                    const summary = document.getElementById('current-mode-summary');
+                    const safeMode = data.lock_mode || 1;
+                    const safeTimeout = data.auto_close_timeout || 3;
+                    const safeFlags = data.behavior_flags || 0;
+
+                    if (safeMode === 1) {
+                        badge.textContent = 'Mode 1: Locker';
+                        badge.className = 'px-2.5 py-1 text-xs font-semibold rounded-full bg-indigo-100 text-indigo-800';
+                    } else if (safeMode === 2) {
+                        badge.textContent = 'Mode 2: Access Door';
+                        badge.className = 'px-2.5 py-1 text-xs font-semibold rounded-full bg-indigo-100 text-indigo-800';
+                    } else {
+                        badge.textContent = `Mode ${safeMode}`;
+                        badge.className = 'px-2.5 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-800';
+                    }
+
+                    const guardEnabled = (safeFlags & 1) !== 0;
+                    summary.textContent = `Auto-Close: ${safeTimeout}s | Guard: ${guardEnabled ? 'Enabled' : 'Disabled'}`;
                 }
             } catch(e){}
         }
@@ -731,7 +760,14 @@
             try {
                 const health = await API.get(`/api/v1/devices/${modalDeviceId}/health`);
                 if(health.health_short) { document.getElementById('diag-vcc').innerText = (health.health_short.vcc_mv/1000).toFixed(2)+'V'; document.getElementById('diag-temp').innerText = health.health_short.temp_c+'°C'; }
-                if(health.health_extended) { document.getElementById('diag-ram').innerText = health.health_extended.free_ram+' B'; const up = health.health_extended.uptime_s; document.getElementById('diag-uptime').innerText = Math.floor(up/3600)+'h '+Math.floor((up%3600)/60)+'m'; }
+                if(health.health_extended) {
+                    document.getElementById('diag-ram').innerText = health.health_extended.free_ram + ' B';
+                    const up = health.health_extended?.uptime_s ?? health.health_extended?.uptime ?? 0;
+                    const hours = Math.floor(up / 3600);
+                    const mins = Math.floor((up % 3600) / 60);
+                    const secs = up % 60;
+                    document.getElementById('diag-uptime').innerText = `${hours}h ${mins}m ${secs}s`;
+                }
                 if(health.health_diag_info) { document.getElementById('diag-watchdog').innerText = health.health_diag_info.watchdog_cnt; document.getElementById('diag-brownout').innerText = health.health_diag_info.brownout_cnt; document.getElementById('diag-can-tx').innerText = health.health_diag_info.can_tx_err; document.getElementById('diag-can-rx').innerText = health.health_diag_info.can_rx_err; document.getElementById('diag-rev').innerText = health.health_diag_info.reset_reason || '--'; }
                 if(health.diag_extended) { document.getElementById('diag-bus-off').innerText = health.diag_extended.bus_off_counter; }
                 
@@ -739,7 +775,14 @@
                 API.get(`/api/v1/devices/${modalDeviceId}/occupancy`).then(occ => { if(occ) { document.getElementById('diag-occ-flag').innerText = occ.occupied ? 'Yes' : 'No'; document.getElementById('diag-occ-owner').innerText = occ.owner_present ? 'Yes' : 'No'; document.getElementById('diag-occ-counter').innerText = occ.state_counter_24 || '0'; } }).catch(()=>{});
             } catch(e){}
         }
-        function refreshDiagnosticsBtn() { refreshDiagnosticsData(); showToast('Diagnostics refresh requested', 'info'); }
+        async function refreshDiagnosticsBtn() {
+            showToast('Diagnostics refresh requested', 'info');
+            try {
+                await API.post(`/api/v1/devices/${modalDeviceId}/request_health`);
+                await new Promise(r => setTimeout(r, 500));
+                await refreshDiagnosticsData();
+            } catch(e) {}
+        }
         setupSSE();
     </script>
 

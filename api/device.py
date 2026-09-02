@@ -126,6 +126,11 @@ def get_version(id: int):
         "hardware_version": dev.hardware_version
     }
 
+@router.post("/devices/{id}/request_health")
+def post_request_health(id: int):
+    lock_service.request_health(id)
+    return {"status": "health requested"}
+
 @router.get("/devices/{id}/occupancy")
 def get_occupancy(id: int):
     dev = can_listener.get_device(id)
@@ -170,6 +175,13 @@ def set_mode(id: int, req: LockModeReq):
         req.door_warning_delay_s, 
         req.door_release_delay_s
     )
+    dev = can_listener.get_device(id)
+    if dev:
+        dev.lock_mode = req.lock_mode
+        dev.auto_close_timeout = req.auto_close_timeout_s
+        dev.lock_mode_behavior_flags = req.behavior_flags
+        dev.door_warning_delay_s = req.door_warning_delay_s
+        dev.door_release_delay_s = req.door_release_delay_s
     return {"status": "mode set"}
 
 @router.get("/devices/{id}/mode")

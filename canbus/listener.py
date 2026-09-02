@@ -60,8 +60,8 @@ class DeviceState:
         # Whitelist & Telemetry state
         self.whitelist_info: Dict[str, Any] = {}
         self.whitelist_items: Dict[int, Dict[str, Any]] = {}
-        self.lock_mode: Optional[int] = None
-        self.auto_close_timeout: Optional[int] = None
+        self.lock_mode: int = 1
+        self.auto_close_timeout: int = 3
         self.occupancy_state: Dict[str, Any] = {}
 
         self.health_short: Dict[str, Any] = {}
