@@ -20,6 +20,10 @@ from config.globals import can_listener, beacon_service
 from api.stream import router as stream_router
 
 
+# Import models to ensure they are registered with Base.metadata
+from models.device import Device
+
+
 # Datenbanktabellen erzeugen
 Base.metadata.create_all(bind=engine)
 

@@ -19,6 +19,7 @@ async def event_stream():
                 last_device_seen[dev_id] = dev.last_seen
                 
                 details = {
+                    "name": getattr(dev, "name", f"Lock {dev_id}"),
                     "is_locked": dev.is_locked,
                     "is_door_closed": dev.is_door_closed,
                     "status_text": dev.status_text,

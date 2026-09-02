@@ -86,7 +86,7 @@ def assign_device(req: AssignRequest):
 @router.get("/devices")
 def get_devices():
     devices = can_listener.devices.values()
-    return [{"device_id": dev.device_id, "status": dev.status_text, "online": dev.online} for dev in devices]
+    return [{"device_id": dev.device_id, "name": getattr(dev, "name", f"Lock {dev.device_id}"), "status": dev.status_text, "online": dev.online} for dev in devices]
 
 @router.get("/devices/{id}")
 def get_device(id: int):
@@ -95,6 +95,7 @@ def get_device(id: int):
         raise HTTPException(status_code=404, detail="Device not found")
     
     return {
+        "name": getattr(dev, "name", f"Lock {id}"),
         "is_locked": dev.is_locked,
         "is_door_closed": dev.is_door_closed,
         "status_text": dev.status_text,
@@ -182,7 +183,42 @@ def set_mode(id: int, req: LockModeReq):
         dev.lock_mode_behavior_flags = req.behavior_flags
         dev.door_warning_delay_s = req.door_warning_delay_s
         dev.door_release_delay_s = req.door_release_delay_s
+        
+        # Save to DB
+        from database.database import SessionLocal
+        from models.device import Device
+        with SessionLocal() as db:
+            db_dev = db.query(Device).filter(Device.device_id == id).first()
+            if db_dev:
+                db_dev.lock_mode = req.lock_mode
+                db_dev.auto_close_timeout = req.auto_close_timeout_s
+                db_dev.behavior_flags = req.behavior_flags
+                db.commit()
+            
     return {"status": "mode set"}
+
+class DevicePatchReq(BaseModel):
+    name: Optional[str] = None
+
+@router.patch("/devices/{id}")
+def update_device(id: int, req: DevicePatchReq):
+    dev = can_listener.get_device(id)
+    if not dev:
+        raise HTTPException(status_code=404, detail="Device not found")
+        
+    if req.name is not None:
+        dev.name = req.name
+        
+        from database.database import SessionLocal
+        from models.device import Device
+        with SessionLocal() as db:
+            db_dev = db.query(Device).filter(Device.device_id == id).first()
+            if db_dev:
+                db_dev.name = req.name
+                db.commit()
+            
+    return {"status": "updated", "name": dev.name}
+
 
 @router.get("/devices/{id}/mode")
 def get_mode(id: int):

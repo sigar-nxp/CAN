@@ -40,6 +40,7 @@ class UnassignedDevice:
 class DeviceState:
     def __init__(self, device_id: int):
         self.device_id = device_id
+        self.name = f"Lock {device_id}"
         self.lock_state = None
         self.lock_error = 0
         self.last_seen = 0.0
@@ -176,22 +177,68 @@ class CANListener:
 
             return {uid_hex: dev.to_dict() for uid_hex, dev in self.unassigned_devices.items()}
 
+    def start(self):
+        if self.running:
+            return
+        self.preload_devices_from_db()
+        self.running = True
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def preload_devices_from_db(self):
+        from database.database import SessionLocal
+        from models.device import Device
+        
+        with SessionLocal() as db:
+            devices = db.query(Device).all()
+            with self.lock:
+                for db_dev in devices:
+                    dev = DeviceState(db_dev.device_id)
+                    dev.name = db_dev.name
+                    dev.lock_mode = db_dev.lock_mode
+                    dev.auto_close_timeout = db_dev.auto_close_timeout
+                    dev.lock_mode_behavior_flags = db_dev.behavior_flags
+                    dev.last_seen = db_dev.last_seen
+                    self.devices[db_dev.device_id] = dev
+        print(f"Preloaded {len(self.devices)} devices from database.")
+
     def get_device(self, device_id: int) -> DeviceState:
         with self.lock:
             if device_id not in self.devices:
                 self.devices[device_id] = DeviceState(device_id)
+                
+                # Check DB for existing device or create a new entry
+                from database.database import SessionLocal
+                from models.device import Device
+                
+                try:
+                    with SessionLocal() as db:
+                        db_dev = db.query(Device).filter(Device.device_id == device_id).first()
+                        if db_dev:
+                            self.devices[device_id].name = db_dev.name
+                            self.devices[device_id].lock_mode = db_dev.lock_mode
+                            self.devices[device_id].auto_close_timeout = db_dev.auto_close_timeout
+                            self.devices[device_id].lock_mode_behavior_flags = db_dev.behavior_flags
+                            self.devices[device_id].last_seen = db_dev.last_seen
+                        else:
+                            new_dev = Device(
+                                device_id=device_id,
+                                name=f"Lock {device_id}",
+                                lock_mode=1,
+                                auto_close_timeout=3,
+                                behavior_flags=0,
+                                last_seen=time.time()
+                            )
+                            db.add(new_dev)
+                            db.commit()
+                except Exception as e:
+                    print(f"Failed to query/save device in DB: {e}")
+
             return self.devices[device_id]
 
     def get_all_devices(self) -> Dict[int, Any]:
         with self.lock:
             return {dev_id: dev.to_dict() for dev_id, dev in self.devices.items()}
-
-    def start(self):
-        if self.running:
-            return
-        self.running = True
-        self.thread = threading.Thread(target=self._loop, daemon=True)
-        self.thread.start()
 
     def stop(self):
         self.running = False

@@ -126,7 +126,10 @@
             <div class="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl w-full">
                 <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
                     <div class="flex justify-between items-center mb-5 border-b pb-3">
-                        <h3 class="text-xl leading-6 font-semibold text-gray-900" id="modal-title">Lock Management & Diagnostics (ID: <span id="modal-dev-id"></span>)</h3>
+                        <h3 class="text-xl leading-6 font-semibold text-gray-900" id="modal-title">
+                            Lock Management & Diagnostics (<span id="modal-dev-name"></span> - ID: <span id="modal-dev-id"></span>)
+                            <button onclick="editDeviceName()" class="ml-2 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 py-1 px-2 rounded border border-gray-300">Edit Name</button>
+                        </h3>
                         <button type="button" class="text-gray-400 hover:text-gray-500 focus:outline-none" onclick="closeModal()">
                             <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                         </button>
@@ -392,6 +395,7 @@
 
     <script>
         const API = {
+            async patch(url, body) { const res = await fetch(url, { method: 'PATCH', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined }); return res.json(); },
             async post(url, body) { const res = await fetch(url, { method: 'POST', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined }); return res.json(); },
             async get(url) { const res = await fetch(url); return res.json(); },
             async delete(url) { const res = await fetch(url, { method: 'DELETE' }); return res.json(); }
@@ -529,8 +533,9 @@
             let labelClass = isLocked ? 'bg-red-100 text-red-800' : (!isClosed ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800');
             const vcc = health?.health_short?.vcc_mv ? (health.health_short.vcc_mv / 1000).toFixed(2) + 'V' : '--';
             const temp = health?.health_short?.temp_c !== undefined ? health.health_short.temp_c + '°C' : '--';
+            const displayName = details.name || `Lock ${id}`;
             const innerHTML = `<div class="px-4 py-3 border-b flex justify-between items-center rounded-t-lg transition-colors ${headerBg}">
-                    <h3 class="text-lg font-bold ${headerText}">Lock ${id}</h3><span class="text-xs font-semibold px-2 py-1 rounded-full ${labelClass}">${statusLabel}</span>
+                    <h3 class="text-lg font-bold ${headerText}">${displayName}</h3><span class="text-xs font-semibold px-2 py-1 rounded-full ${labelClass}">${statusLabel}</span>
                 </div>
                 <div class="p-4 flex-1 flex flex-col space-y-3 bg-white rounded-b-lg">
                     <div class="space-y-2 text-sm">
@@ -571,7 +576,7 @@
                         <button onclick="deviceAction(${id}, 'open_hold')" class="bg-purple-50 hover:bg-purple-100 text-purple-700 py-1.5 px-2 rounded border border-purple-200 text-xs font-medium">Hold Open</button>
                         <button onclick="deviceAction(${id}, 'reset')" class="bg-gray-100 hover:bg-gray-200 text-gray-800 py-1.5 px-2 rounded border border-gray-300 text-xs font-medium">Lock/Reset</button>
                     </div>
-                    <button onclick="openModal(${id})" class="mt-2 w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 border border-indigo-200 rounded text-sm font-semibold transition-colors shadow-sm">Manage & Diagnostics</button>
+                    <button onclick="openModal(${id}, '${displayName.replace(/'/g, "\\'")}')" class="mt-2 w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 border border-indigo-200 rounded text-sm font-semibold transition-colors shadow-sm">Manage & Diagnostics</button>
                 </div>`;
             if (!card) {
                 card = document.createElement('div');
@@ -656,7 +661,21 @@
             if (tabId === 'tab-whitelist' && modalDeviceId) fetchWhitelist();
             if (tabId === 'tab-mode' && modalDeviceId) fetchMode();
         }
-        async function openModal(id) { modalDeviceId = id; document.getElementById('modal-dev-id').innerText = id; document.getElementById('device-modal').classList.remove('hidden'); switchTab('tab-signals'); }
+        async function editDeviceName() {
+            if (!modalDeviceId) return;
+            const newName = prompt("Enter new device name:");
+            if (newName !== null && newName.trim() !== "") {
+                try {
+                    const res = await API.patch(`/api/v1/devices/${modalDeviceId}`, { name: newName.trim() });
+                    document.getElementById('modal-dev-name').innerText = res.name;
+                    showToast('Name updated successfully', 'success');
+                } catch(e) {
+                    showToast('Failed to update name', 'error');
+                }
+            }
+        }
+
+        async function openModal(id, name) { modalDeviceId = id; document.getElementById('modal-dev-id').innerText = id; document.getElementById('modal-dev-name').innerText = name || `Lock ${id}`; document.getElementById('device-modal').classList.remove('hidden'); switchTab('tab-signals'); }
         function closeModal() { document.getElementById('device-modal').classList.add('hidden'); modalDeviceId = null; }
         
         async function modalAction(action) { if(!modalDeviceId) return; try { await API.post(`/api/v1/devices/${modalDeviceId}/${action}`); showToast(`Action successful`, 'success'); } catch(e) { showToast('Error', 'error'); } }

@@ -5,40 +5,27 @@ Contains the SQLAlchemy ORM models that map application objects to the
 underlying database tables for persisting device information and state.
 """
 
-from sqlalchemy import Column, Integer, String
+from sqlalchemy import Column, Integer, String, Float
 from database.database import Base
+import time
 
 class Device(Base):
     """
     SQLAlchemy model representing a physical lock or device.
     
     Attributes:
-        id (int): Primary key, unique database identifier for the device.
+        device_id (int): Primary key, unique database identifier (CAN ID) for the device.
         name (str): Human-readable name of the device.
-        device_type (str): Type categorization of the device.
-        interface (str): Hardware interface used (e.g., "CAN").
-        can_address (int): CAN node ID assigned to the device.
-        status (str): Current operating status (e.g., "OFFLINE").
-        firmware (str): Firmware version of the device.
-        serial_number (str): Unique serial number of the hardware.
-        location (str): Physical location descriptor for the device.
+        lock_mode (int): Lock operation mode.
+        auto_close_timeout (int): Auto close timeout in seconds.
+        behavior_flags (int): Behavior flags.
+        last_seen (float): Last time the device was seen.
     """
     __tablename__ = "devices"
 
-    id = Column(Integer, primary_key=True, index=True)
-
-    name = Column(String, nullable=False)
-
-    device_type = Column(String, nullable=False)
-
-    interface = Column(String, default="CAN")
-
-    can_address = Column(Integer)
-
-    status = Column(String, default="OFFLINE")
-
-    firmware = Column(String)
-
-    serial_number = Column(String)
-
-    location = Column(String)
+    device_id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, default="Lock")
+    lock_mode = Column(Integer, default=1)
+    auto_close_timeout = Column(Integer, default=3)
+    behavior_flags = Column(Integer, default=0)
+    last_seen = Column(Float, default=time.time)
