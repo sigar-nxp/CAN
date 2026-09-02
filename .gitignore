@@ -5,9 +5,16 @@ __pycache__/
 *.pyo
 *.pyd
 .pytest_cache/
-*.db
-*.sqlite3
-*.log
 .vscode/
 *.code-workspace
 .idea/
+
+# SQLite Databases & Local Storage
+*.db
+*.sqlite
+*.sqlite3
+pslocks.db
+
+# Log Files & Directories
+*.log
+logs/

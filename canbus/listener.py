@@ -9,7 +9,12 @@ device states tracking properties like lock status, telemetry, and health.
 
 import threading
 import time
+import queue
 from typing import Dict, Any, Optional
+from datetime import datetime
+
+from database.database import SessionLocal
+from models.log import EventLog
 
 from .service import CANService
 from .parser import CANParser, StatusBasic, HealthStatus, StatusError, CommandAck, IdRequest, UIDPart1, UIDPart2, StatusRFID, StatusRFIDPart2, EventWlAutoDelete, HealthVersionInfo, HealthDeviceInfo, HealthShort, HealthExtended, HealthDiagInfo, HealthSecurityStatus, WlInfoReport, LockModeReport, WlListV2Item, WlListV2UidPart1, WlListV2UidPart2, OccupancyStateReport, OccupancyOwnerShort, PolicyActionReport, RuntimeStateSnapshot, DiagExtended
@@ -161,6 +166,51 @@ class CANListener:
         self.latest_uid_part1: Optional[bytes] = None
         self.latest_uid_part2: Optional[bytes] = None
         self.lock = threading.Lock()
+        
+        self.log_queue = queue.Queue()
+        self.recent_logs = []
+        self.log_thread = None
+
+    def _log_worker(self):
+        with SessionLocal() as db:
+            while self.running:
+                item = self.log_queue.get()
+                if item is None:
+                    break
+                try:
+                    log_entry = EventLog(**item)
+                    db.add(log_entry)
+                    db.commit()
+                    db.refresh(log_entry)
+                    
+                    log_dict = {
+                        "id": log_entry.id,
+                        "timestamp": log_entry.timestamp.isoformat() + "Z",
+                        "device_id": log_entry.device_id,
+                        "device_name": log_entry.device_name,
+                        "event_type": log_entry.event_type,
+                        "card_uid": log_entry.card_uid,
+                        "details": log_entry.details
+                    }
+                    with self.lock:
+                        self.recent_logs.append(log_dict)
+                        if len(self.recent_logs) > 200:
+                            self.recent_logs = self.recent_logs[-100:]
+                except Exception as e:
+                    print(f"Log worker error: {e}")
+                    db.rollback()
+
+    def add_log(self, device_id: int, event_type: str, card_uid: Optional[str] = None, details: Optional[str] = None):
+        device_name = f"Lock {device_id}"
+        if device_id in self.devices:
+            device_name = self.devices[device_id].name
+        self.log_queue.put({
+            "device_id": device_id,
+            "device_name": device_name,
+            "event_type": event_type,
+            "card_uid": card_uid,
+            "details": details
+        })
 
     def clear_uid_parts(self):
         with self.lock:
@@ -183,7 +233,9 @@ class CANListener:
         self.preload_devices_from_db()
         self.running = True
         self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.log_thread = threading.Thread(target=self._log_worker, daemon=True)
         self.thread.start()
+        self.log_thread.start()
 
     def preload_devices_from_db(self):
         from database.database import SessionLocal
@@ -244,6 +296,9 @@ class CANListener:
         self.running = False
         if self.thread:
             self.thread.join(timeout=2.0)
+        self.log_queue.put(None)
+        if self.log_thread:
+            self.log_thread.join(timeout=2.0)
 
     def _loop(self):
         while self.running:
@@ -261,8 +316,20 @@ class CANListener:
                 if isinstance(msg, StatusBasic):
                     dev = self.get_device(dev_id)
                     with self.lock:
+                        prev_state = dev.lock_state
+                        prev_error = dev.lock_error
+                        
                         dev.update_lock_state(msg.lock_state)
                         dev.update_error(msg.lock_error)
+                        
+                        if prev_state is not None and prev_state != msg.lock_state:
+                            self.add_log(dev_id, "LOCK_STATUS", None, f"State changed to {dev.status_text}")
+                        if prev_error is not None and prev_error != msg.lock_error:
+                            if msg.lock_error != 0:
+                                self.add_log(dev_id, "ERROR", None, f"Error changed to {dev.error_text}")
+                            else:
+                                self.add_log(dev_id, "LOCK_STATUS", None, "Error cleared")
+                                
                         dev.last_seen = time.time()
                 elif isinstance(msg, HealthStatus):
                     dev = self.get_device(dev_id)
@@ -321,8 +388,10 @@ class CANListener:
                     dev = self.get_device(dev_id)
                     with self.lock:
                         if msg.uid_len <= len(msg.uid):
-                            dev.last_scanned_card = msg.uid[:msg.uid_len].hex()
+                            uid_hex = msg.uid[:msg.uid_len].hex()
+                            dev.last_scanned_card = uid_hex
                             dev._partial_rfid = None
+                            self.add_log(dev_id, "RFID_SCAN", uid_hex, "Card scanned (4-byte)")
                         else:
                             dev._partial_rfid = msg
                         dev.last_seen = time.time()
@@ -332,8 +401,11 @@ class CANListener:
                         if hasattr(dev, '_partial_rfid') and dev._partial_rfid:
                             full_uid_bytes = dev._partial_rfid.uid + msg.uid_part2
                             expected_len = dev._partial_rfid.uid_len
-                            dev.last_scanned_card = full_uid_bytes[:expected_len].hex()
-                            dev._partial_rfid = None
+                            if expected_len <= len(full_uid_bytes):
+                                uid_hex = full_uid_bytes[:expected_len].hex()
+                                dev.last_scanned_card = uid_hex
+                                dev._partial_rfid = None
+                                self.add_log(dev_id, "RFID_SCAN", uid_hex, "Card scanned (7-byte)")
                         dev.last_seen = time.time()
                 elif isinstance(msg, EventWlAutoDelete):
                     dev = self.get_device(dev_id)
@@ -347,6 +419,12 @@ class CANListener:
                     with self.lock:
                         dev.last_ack_command = msg.command
                         dev.last_ack_time = time.time()
+                        if msg.command == 0x01: # OPEN_LOCK
+                            self.add_log(dev_id, "MANUAL_OPEN", None, "Pulse open commanded")
+                        elif msg.command == 0x04: # OPEN_HOLD
+                            self.add_log(dev_id, "MANUAL_OPEN", None, "Hold open commanded")
+                        elif msg.command == 0x05: # OPEN_RESET
+                            self.add_log(dev_id, "MANUAL_OPEN", None, "Lock reset commanded")
                 elif isinstance(msg, StatusError):
                     dev = self.get_device(dev_id)
                     with self.lock:
@@ -428,10 +506,23 @@ class CANListener:
                 elif isinstance(msg, PolicyActionReport):
                     dev = self.get_device(dev_id)
                     with self.lock:
+                        action_map = {0: "DENIED", 1: "GRANTED_PULSE", 2: "GRANTED_HOLD", 3: "GRANTED_TOGGLE"}
+                        action_str = action_map.get(msg.open_action, f"ACTION_{msg.open_action}")
+                        if msg.local_result == 0:
+                            result_str = "DENIED"
+                            event_type = "ACCESS_DENIED"
+                        else:
+                            result_str = "GRANTED"
+                            event_type = "ACCESS_GRANTED"
+                        
+                        self.add_log(dev_id, event_type, dev.last_scanned_card, f"Policy: {msg.policy}, Action: {action_str}, Result: {result_str}")
                         dev.last_seen = time.time()
                 elif isinstance(msg, RuntimeStateSnapshot):
                     dev = self.get_device(dev_id)
                     with self.lock:
+                        prev_state = dev.lock_state
+                        prev_error = dev.lock_error
+                        
                         dev.runtime_state.update({
                             "lock_id": msg.lock_id,
                             "physical_state": msg.physical_state,
@@ -444,6 +535,15 @@ class CANListener:
                         # refresh lock state
                         dev.update_lock_state(msg.physical_state)
                         dev.update_error(msg.lock_error)
+                        
+                        if prev_state is not None and prev_state != msg.physical_state:
+                            self.add_log(dev_id, "LOCK_STATUS", None, f"State changed to {dev.status_text}")
+                        if prev_error is not None and prev_error != msg.lock_error:
+                            if msg.lock_error != 0:
+                                self.add_log(dev_id, "ERROR", None, f"Error changed to {dev.error_text}")
+                            else:
+                                self.add_log(dev_id, "LOCK_STATUS", None, "Error cleared")
+                                
                         dev.last_seen = time.time()
                 elif isinstance(msg, DiagExtended):
                     dev = self.get_device(dev_id)

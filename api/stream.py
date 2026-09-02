@@ -11,6 +11,7 @@ async def event_stream():
     last_device_seen = {}
     last_unassigned_seen = {}
     last_beacon_sent = -1
+    last_log_idx = 0
 
     while True:
         # Check devices
@@ -73,6 +74,17 @@ async def event_stream():
                 "total_beacons_sent": beacon_service.total_beacons_sent
             }
             yield f"event: beacon_update\ndata: {json.dumps(beacon_data)}\n\n"
+
+        # Check logs
+        current_logs = can_listener.recent_logs
+        if last_log_idx == 0 and current_logs:
+            # First iteration, just catch up to the latest log
+            last_log_idx = current_logs[-1]["id"]
+        elif current_logs:
+            for log in current_logs:
+                if log["id"] > last_log_idx:
+                    yield f"event: log_entry\ndata: {json.dumps(log)}\n\n"
+                    last_log_idx = log["id"]
 
         await asyncio.sleep(0.2)
 

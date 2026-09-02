@@ -22,9 +22,10 @@ from api.stream import router as stream_router
 
 # Import models to ensure they are registered with Base.metadata
 from models.device import Device
+from models.log import EventLog
+from api.logs import router as logs_router
 
-
-# Datenbanktabellen erzeugen
+# Create database tables
 Base.metadata.create_all(bind=engine)
 
 
@@ -85,4 +86,10 @@ app.include_router(
 app.include_router(
     stream_router,
     prefix="/api/v1"
+)
+
+app.include_router(
+    logs_router,
+    prefix="/api/v1",
+    tags=["Logs"]
 )
