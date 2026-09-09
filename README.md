@@ -25,7 +25,11 @@ The Gateway acts as the central bridge between IP networks and the low-level CAN
 |  +───────────────────────+   +───────────────────────────────────────+  |
 |                                   │                                     |
 |  +───────────────────────────────────────────────────────────────────+  |
-|  |  Background Workers (CANListener Daemon & Master Beacon Heartbeat)|  |
+|  |  Background Workers (CANListener, Beacon, Asynchronous Log Worker)|  |
+|  +───────────────────────────────────────────────────────────────────+  |
+|                                   │                                     |
+|  +───────────────────────────────────────────────────────────────────+  |
+|  |  Storage Engine (SQLite: Device Config, Custom Names, Audit Logs) |  |
 |  +───────────────────────────────────────────────────────────────────+  |
 |                                   │                                     |
 |  +───────────────────────────────────────────────────────────────────+  |
@@ -45,6 +49,8 @@ The Gateway acts as the central bridge between IP networks and the low-level CAN
 - **Whitelist Management**: Slot-based RFID access management (Slot 1 Ephemeral, Slots 2..N Persistent) with custom validity (TTL in days) and local policy overrides.
 - **Door Close Guard**: Active security monitoring that triggers local optical/acoustic alarms and safe releases if doors remain open.
 - **Full Telemetry & Diagnostics**: Real-time sensing of door position, bolt state, battery/supply voltage (VCC), temperature, error counters, and bus-off recovery metrics.
+- **Data Persistence & Custom Aliases**: Non-volatile storage of device configuration, operational modes, and user-assigned names (e.g., "Locker 12") via SQLite.
+- **Asynchronous Audit Logging**: Non-blocking database tracking of access decisions, card scans, state changes, and hardware errors with real-time SSE event dispatching.  
 
 ---
 
@@ -276,6 +282,25 @@ Sets an optical override pattern on the lock's LED.
 
 *Modes:* `0` = OFF, `1` = Green Solid, `2` = Red Solid, `3` = Green Blink (1s/1s), `4` = Red Blink, `5` = Green Fast Blink. `ttl=0` applies indefinitely until reset.
 
+#### `PATCH /devices/{id}`
+
+Updates local lock settings such as the custom display name.
+
+* **Body**:
+
+```json
+{
+  "name": "Locker 12"
+}
+```
+* **Response**:
+```json
+{
+  "status": "success",
+  "device_id": 1,
+  "name": "Locker 12"
+}
+```
 ---
 
 ### 5.4 Cloud Authentication & RFID Responses
@@ -469,6 +494,66 @@ Performs a warm reboot of the lock node controller.
 #### `POST /devices/{id}/factory_reset`
 
 Reverts the lock to unprovisioned state (`0x7F`), resetting Device ID and flash memory.
+
+### 5.8 Activity & Audit Logging
+
+The platform logs critical physical and network events to an internal SQLite database (`pslocks.db`) using an asynchronous worker queue to prevent CAN bus blocking.
+
+#### `GET /api/v1/logs`
+
+Retrieves a paginated list of recorded audit log events in reverse-chronological order.
+
+* **Query Parameters**:
+  * `limit` (int, default: 50): Maximum number of records to return.
+  * `device_id` (int, optional): Filter logs for a specific lock node.
+
+* **Response**:
+
+```json
+[
+  {
+    "id": 12,
+    "timestamp": "2026-09-02T20:37:47.617179Z",
+    "device_id": 1,
+    "device_name": "Locker 12",
+    "event_type": "LOCK_STATUS",
+    "card_uid": null,
+    "details": "State changed to LOCKED"
+  },
+  {
+    "id": 11,
+    "timestamp": "2026-09-02T20:35:10.120400Z",
+    "device_id": 1,
+    "device_name": "Locker 12",
+    "event_type": "RFID_SCAN",
+    "card_uid": "044426c2ff7180",
+    "details": null
+  }
+]
+```
+
+**Common Event Types:**
+
+* `RFID_SCAN`: Recorded when an authorized or unknown card is presented.
+
+
+* `LOCK_STATUS`: Bolt or door contact sensor transition.
+
+
+* `MANUAL_OPEN`: API-triggered pulse open, hold open, or reset.
+* `ACCESS_GRANTED` / `ACCESS_DENIED`: Local whitelist or cloud authentication decisions.
+
+
+### 5.9 Real-Time Event Streaming (SSE)
+
+#### `GET /api/v1/stream`
+
+Server-Sent Events endpoint streaming real-time status frames and live audit events to connected frontends or client applications.
+
+* **Events**:
+  * `device_state`: Dispatched on hardware telemetry and status changes.
+  * `log_entry`: Dispatched immediately when a new audit event is stored.
+
 
 
 ---
