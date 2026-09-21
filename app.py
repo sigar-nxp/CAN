@@ -6,18 +6,20 @@ tables are created, and manages background service lifecycles (CAN bus
 listener and Master Beacon) via startup/shutdown events.
 """
 
+import asyncio
 from datetime import datetime
 import platform
+import os
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-import os
 
 from database.database import Base, engine
 from api.device import router as devices_router
 from api.system import router as system_router
-from config.globals import can_listener, beacon_service
+from config.globals import can_service, can_listener, beacon_service
 from api.stream import router as stream_router
+from routers.ota import router as ota_router
 
 
 # Import models to ensure they are registered with Base.metadata
@@ -53,10 +55,16 @@ def startup():
     """
     Startup event handler for FastAPI.
     
-    Starts the background CAN listener to process incoming messages and
-    the Master Beacon service to broadcast heartbeat/timing signals.
+    Initializes the centralized CANManager with the running event loop,
+    starts the background reader, device listener, and Master Beacon.
     """
     print("PS Locks OIP gestartet")
+    try:
+        loop = asyncio.get_running_loop()
+        can_service.set_loop(loop)
+    except RuntimeError:
+        pass
+    can_service.start()
     can_listener.start()
     beacon_service.start()
 
@@ -65,11 +73,12 @@ def shutdown():
     """
     Shutdown event handler for FastAPI.
     
-    Gracefully stops the CAN listener and the Master Beacon background
-    services when the application shuts down.
+    Gracefully stops the CAN listener, the Master Beacon background
+    service, and the central CAN manager.
     """
     can_listener.stop()
     beacon_service.stop()
+    can_service.stop()
 
 
 app.include_router(
@@ -92,4 +101,8 @@ app.include_router(
     logs_router,
     prefix="/api/v1",
     tags=["Logs"]
+)
+
+app.include_router(
+    ota_router
 )

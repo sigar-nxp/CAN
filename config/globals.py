@@ -10,6 +10,6 @@ from canbus.service import CANService
 from canbus.listener import CANListener
 from services.beacon_service import BeaconService
 
-can_service = CANService(channel="can0", bitrate=100000, simulation=False)
+can_service = CANService(channel="can0", bitrate=50000, simulation=False)
 can_listener = CANListener(can_service)
 beacon_service = BeaconService(can_service)

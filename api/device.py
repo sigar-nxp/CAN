@@ -86,7 +86,18 @@ def assign_device(req: AssignRequest):
 @router.get("/devices")
 def get_devices():
     devices = can_listener.devices.values()
-    return [{"device_id": dev.device_id, "name": getattr(dev, "name", f"Lock {dev.device_id}"), "status": dev.status_text, "online": dev.online} for dev in devices]
+    return [
+        {
+            "device_id": dev.device_id,
+            "name": getattr(dev, "name", f"Lock {dev.device_id}"),
+            "status": dev.status_text,
+            "online": dev.online,
+            "active_slot": getattr(dev, "active_slot", 0),
+            "target_slot": 1 if getattr(dev, "active_slot", 0) == 0 else 0,
+            "target_binary": "slot_b.bin" if getattr(dev, "active_slot", 0) == 0 else "slot_a.bin",
+        }
+        for dev in devices
+    ]
 
 @router.get("/devices/{id}")
 def get_device(id: int):
@@ -94,6 +105,7 @@ def get_device(id: int):
     if not dev:
         raise HTTPException(status_code=404, detail="Device not found")
     
+    active_slot = getattr(dev, "active_slot", 0)
     return {
         "name": getattr(dev, "name", f"Lock {id}"),
         "is_locked": dev.is_locked,
@@ -101,7 +113,10 @@ def get_device(id: int):
         "status_text": dev.status_text,
         "error_text": dev.error_text,
         "last_scanned_card": dev.last_scanned_card,
-        "door_close_guard_supported": dev.door_close_guard_supported
+        "door_close_guard_supported": dev.door_close_guard_supported,
+        "active_slot": active_slot,
+        "target_slot": 1 if active_slot == 0 else 0,
+        "target_binary": "slot_b.bin" if active_slot == 0 else "slot_a.bin",
     }
 
 @router.get("/devices/{id}/health")
@@ -127,8 +142,18 @@ def get_version(id: int):
         "hardware_version": dev.hardware_version
     }
 
+def check_device_not_in_ota(device_id: int) -> None:
+    """Ensures device is not currently undergoing an OTA firmware update."""
+    from services.ota_service import ota_service
+    if ota_service.is_task_running(device_id):
+        raise HTTPException(
+            status_code=503,
+            detail="Device is currently undergoing an OTA firmware update",
+        )
+
 @router.post("/devices/{id}/request_health")
 def post_request_health(id: int):
+    check_device_not_in_ota(id)
     lock_service.request_health(id)
     return {"status": "health requested"}
 
@@ -141,33 +166,39 @@ def get_occupancy(id: int):
 
 @router.post("/devices/{id}/open")
 def open_device(id: int):
+    check_device_not_in_ota(id)
     lock_service.open(id)
     return {"status": "opened"}
 
 @router.post("/devices/{id}/open_hold")
 def open_hold_device(id: int):
+    check_device_not_in_ota(id)
     lock_service.open_hold(id)
     return {"status": "held open"}
 
 @router.post("/devices/{id}/reset")
 def reset_device(id: int):
+    check_device_not_in_ota(id)
     lock_service.open_reset(id)
     return {"status": "open state reset"}
 
 @router.post("/devices/{id}/led")
 def led_device(id: int, req: LEDRequest):
+    check_device_not_in_ota(id)
     from canbus.commands import led_set
     lock_service.send(led_set(id, req.mode, req.period10ms, req.duty, req.ttl))
     return {"status": "led set"}
 
 @router.post("/devices/{id}/buzzer")
 def buzzer_device(id: int, req: BuzzerRequest):
+    check_device_not_in_ota(id)
     from canbus.commands import buzz_play
     lock_service.send(buzz_play(id, req.sound, req.repeat))
     return {"status": "buzzer set"}
 
 @router.post("/devices/{id}/mode")
 def set_mode(id: int, req: LockModeReq):
+    check_device_not_in_ota(id)
     lock_service.set_lock_mode(
         id, 
         req.lock_mode, 
@@ -235,6 +266,7 @@ def get_mode(id: int):
 
 @router.get("/devices/{id}/whitelist")
 async def get_whitelist(id: int):
+    check_device_not_in_ota(id)
     dev = can_listener.get_device(id)
     if not dev:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -262,6 +294,7 @@ async def get_whitelist(id: int):
 
 @router.post("/devices/{id}/whitelist")
 def add_whitelist(id: int, req: WhitelistWriteReq):
+    check_device_not_in_ota(id)
     try:
         uid_bytes = bytes.fromhex(req.uid_hex)
     except ValueError:
@@ -285,42 +318,50 @@ def add_whitelist(id: int, req: WhitelistWriteReq):
 
 @router.delete("/devices/{id}/whitelist/{slot_index}")
 def delete_whitelist_slot(id: int, slot_index: int):
+    check_device_not_in_ota(id)
     lock_service.delete_wl_slot(id, slot_index)
     return {"status": "whitelist slot deleted"}
 
 @router.delete("/devices/{id}/whitelist")
 def clear_whitelist(id: int):
+    check_device_not_in_ota(id)
     lock_service.wl_clear(id)
     return {"status": "whitelist cleared"}
 
 @router.post("/devices/{id}/whitelist/{slot_index}/policy")
 def set_policy(id: int, slot_index: int, req: PolicyReq):
+    check_device_not_in_ota(id)
     lock_service.set_wl_slot_policy(id, slot_index, req.policy, req.open_action, req.flags)
     return {"status": "policy set"}
 
 @router.post("/devices/{id}/auth_response")
 def auth_response(id: int, req: AuthRespReq):
+    check_device_not_in_ota(id)
     lock_service.auth_resp(id, req.result, req.action)
     return {"status": "auth response processed"}
 
 @router.post("/devices/{id}/device_reset")
 def device_reset(id: int):
+    check_device_not_in_ota(id)
     lock_service.device_reset(id)
     return {"status": "device reset"}
 
 @router.post("/devices/{id}/factory_reset")
 def factory_reset(id: int):
+    check_device_not_in_ota(id)
     lock_service.factory_reset(id)
     return {"status": "factory reset"}
 
 @router.post("/devices/{id}/buzzer_stop")
 def buzzer_stop_device(id: int):
+    check_device_not_in_ota(id)
     from canbus.commands import buzz_stop
     lock_service.send(buzz_stop(id))
     return {"status": "buzzer stopped"}
 
 @router.post("/devices/{id}/led_reset")
 def led_reset_device(id: int):
+    check_device_not_in_ota(id)
     from canbus.commands import led_reset
     lock_service.send(led_reset(id))
     return {"status": "led reset"}

@@ -556,6 +556,161 @@ Server-Sent Events endpoint streaming real-time status frames and live audit eve
 
 
 
+
+### 5.10 Firmware Management & Over-The-Air (OTA) Updates
+
+The gateway implements a unified single-package release architecture for STM32C092 dual-bank bootloaders. Users upload a single `.ota` container, and the gateway autonomously manages staging, binary verification, slot targeting, and flashing without requiring manual slot selection.
+
+#### 1. Unified Single-File Package Format (`.ota`)
+
+Release packages (`pslocks_firmware_vX.Y.Z.ota`) are standard ZIP archives produced by `tools/package_firmware.py` (or `make package_ota`):
+
+```
+pslocks_firmware_v1.0.0.ota (ZIP Container)
+├── manifest.json       (Release metadata, target MCU, sizes, IEEE 802.3 CRC32 checksums)
+├── slot_a.bin          (Binary linked for Flash Bank A: 0x08004000, 112 KB limit)
+└── slot_b.bin          (Binary linked for Flash Bank B: 0x08020000, 112 KB limit)
+```
+
+**Manifest Schema (`manifest.json`):**
+```json
+{
+  "version": "1.0.0",
+  "timestamp": "2026-09-21T20:19:47Z",
+  "target_mcu": "STM32C092",
+  "binaries": {
+    "slot_a": {
+      "filename": "slot_a.bin",
+      "crc32": "0x63E4A0E1",
+      "crc32_int": 1675927777,
+      "size": 71520
+    },
+    "slot_b": {
+      "filename": "slot_b.bin",
+      "crc32": "0xEF071C1A",
+      "crc32_int": 4010220570,
+      "size": 71520
+    }
+  }
+}
+```
+
+#### 2. Autonomous Dual-Slot Resolution & Synchronization
+
+The gateway dynamically resolves which slot binary to flash based on live telemetry directly reported by the lock hardware:
+- **Lock running on Slot A (`active_slot: 0`)**: Autonomously flashes `slot_b.bin` into Bank B (`0x08020000`).
+- **Lock running on Slot B (`active_slot: 1`)**: Autonomously flashes `slot_a.bin` into Bank A (`0x08004000`).
+
+**Hardware-Driven Bank State Synchronization:**
+- Microcontroller firmware evaluates its Vector Table Offset Register `(SCB->VTOR >= 0x08020000) ? 1 : 0` to determine live execution bank with 100% hardware certainty.
+- Real-time broadcast: Emitted in every `STATUS_BASIC` frame (`0x200 | devId`, Byte 4: `active_slot`) and `HEALTH_P3` version frame (`0x300 | devId`, Byte 6: `active_slot`).
+- Bootloader Handshake Verification: On `CMD_OTA_START` handshake, the bootloader transmits `ACK_OTA_START` with Byte 2 containing its active slot. The gateway verifies and dynamically re-aligns the binary before streaming chunk 0, completely preventing bank inversion.
+
+#### `POST /api/v1/ota/upload`
+
+Uploads and validates a `.ota` release bundle or stages a raw `.bin` file.
+
+- **Request**: Multipart form data with `file` field (`pslocks_firmware_vX.Y.Z.ota`).
+- **Validation**: Verifies ZIP integrity, parses `manifest.json`, validates `target_mcu`, and checks IEEE 802.3 CRC32 checksums of both binaries. Rejects mismatched bundles with HTTP 400.
+- **Storage**: Unpacks into versioned directory `uploads/releases/vX.Y.Z/` and updates `uploads/releases/latest_release.json`.
+- **Response**:
+```json
+{
+  "status": "staged",
+  "type": "bundle",
+  "version": "v1.0.0",
+  "target_mcu": "STM32C092",
+  "release_dir": "/home/admin/PSLOCKS_OIP/uploads/releases/v1.0.0",
+  "filename": "pslocks_firmware_v1.0.0.ota",
+  "slot_a": { "path": ".../slot_a.bin", "size": 71520, "crc32": "0x63E4A0E1" },
+  "slot_b": { "path": ".../slot_b.bin", "size": 71520, "crc32": "0xEF071C1A" }
+}
+```
+
+#### `GET /api/v1/ota/release`
+
+Retrieves metadata of the active staged firmware release bundle.
+
+```json
+{
+  "has_release": true,
+  "version": "v1.0.0",
+  "raw_version": "1.0.0",
+  "target_mcu": "STM32C092",
+  "timestamp": "2026-09-21T20:19:47Z",
+  "release_dir": ".../uploads/releases/v1.0.0",
+  "binaries": {
+    "slot_a": { "filename": "slot_a.bin", "path": ".../slot_a.bin", "crc32": "0x63E4A0E1", "size": 71520 },
+    "slot_b": { "filename": "slot_b.bin", "path": ".../slot_b.bin", "crc32": "0xEF071C1A", "size": 71520 }
+  }
+}
+```
+
+#### `POST /api/v1/devices/{id}/ota/start`
+
+Initiates an asynchronous background OTA update for a target lock node.
+
+- **Body**: `{"binary_path": "auto"}` (or empty `{}`). The gateway autonomously resolves the target bank binary.
+- **Response**:
+```json
+{
+  "status": "started",
+  "task_id": "ota_task_1",
+  "device_id": 1,
+  "binary_path": "/home/admin/PSLOCKS_OIP/uploads/releases/v1.0.0/slot_b.bin"
+}
+```
+
+#### `GET /api/v1/devices/{id}/ota/status`
+
+Polls real-time OTA progress, operational states, and slot metadata for a target lock node.
+
+```json
+{
+  "device_id": 1,
+  "progress": 65,
+  "state": "FLASH",
+  "error": null,
+  "active_slot": 0,
+  "target_slot": 1,
+  "target_binary": "slot_b.bin"
+}
+```
+*States*: `IDLE`, `QUEUED`, `ERASE`, `FLASH`, `VERIFY`, `COMPLETE`, `ERROR`.
+
+#### `POST /api/v1/devices/{id}/ota/reset`
+
+Resets the in-memory OTA task status back to `IDLE 0%`.
+
+#### `POST /api/v1/ota/batch/start`
+
+Enqueues sequential batch flashing across all online locks or a specified list of node IDs. Flashes one lock at a time to prevent bus congestion.
+
+- **Body**:
+```json
+{
+  "device_ids": [1, 2, 9],
+  "binary_path": "auto"
+}
+```
+
+#### `GET /api/v1/ota/batch/status`
+
+Returns authoritative global batch progress across all queued devices.
+
+```json
+{
+  "running": true,
+  "current_device_id": 1,
+  "current_index": 0,
+  "total_devices": 3,
+  "completed_devices": [],
+  "failed_devices": [],
+  "device_ids": [1, 2, 9],
+  "state": "RUNNING"
+}
+```
+
 ---
 
 ## 6. CAN Protocol Reference (Standard 11-Bit)
@@ -573,6 +728,8 @@ Formula: `CAN_ID = Base_ID | Device_ID` (Default / Unprovisioned ID = `0x7F`).
 | **ID_REQUEST** | `0x500` | Device -> Gateway | Unprovisioned boot broadcast |
 | **UID_PART1** | `0x600` | Device -> Gateway | Hardware UID Bytes 0..7 |
 | **UID_PART2** | `0x700` | Device -> Gateway | Hardware UID Bytes 8..11 |
+| **OTA_COMMAND** | `0x780` | Gateway -> Device | Dual-bank bootloader command (`0x780 \| devId`) |
+| **OTA_ACK** | `0x790` | Device -> Gateway | Bootloader flow-control & status ACK (`0x790 \| devId`) |
 
 ---
 
@@ -621,6 +778,59 @@ Formula: `CAN_ID = Base_ID | Device_ID` (Default / Unprovisioned ID = `0x7F`).
 | `0x05` | `OPEN_PULSE` | Actuator moving (Timed unlock pulse) | Dynamic |
 | `0x06` | `OPEN_HOLD_DO` | Permanently Unlocked | Open |
 | `0x07` | `OPEN_HOLD_DC` | Permanently Unlocked | Closed |
+
+
+### 6.5 Normative OTA Bootloader Protocol (Dual-Bank STM32C092)
+
+The lock node microcontroller utilizes a dedicated dual-bank bootloader residing in Flash Page 0..7 (`0x08000000`).
+
+#### Memory Mapping (256 KB Flash, 30 KB RAM)
+
+| Region | Address Range | Size / Pages | Description |
+| --- | --- | --- | --- |
+| **Bootloader** | `0x08000000 - 0x08003FFF` | 16 KB (Pages 0..7) | CAN Bootloader & Fail-Safe Engine |
+| **Slot A (Bank A)** | `0x08004000 - 0x0801FFFF` | 112 KB (Pages 8..63) | Primary Application Slot |
+| **Slot B (Bank B)** | `0x08020000 - 0x0803BFFF` | 112 KB (Pages 64..119) | Secondary Application Slot |
+| **Bootloader Metadata**| `0x0803C000 - 0x0803C7FF` | 2 KB (Page 120) | Active slot, image sizes, CRC32 checksums |
+| **Config & Whitelist** | `0x0803C800 - 0x0803FFFF` | 14 KB (Pages 121..127) | Device configuration and local whitelist |
+
+#### Flash Metadata Layout (`BootloaderMetadata_t` @ 0x0803C000)
+
+```c
+typedef struct {
+    uint32_t magic;              // Validation magic word (0x424F4F54 = 'BOOT')
+    uint32_t active_slot;        // Active slot index (0 = Slot A, 1 = Slot B)
+    uint32_t slot_a_size;        // Firmware size in Slot A in bytes
+    uint32_t slot_a_crc32;       // IEEE 802.3 CRC32 checksum for Slot A
+    uint32_t slot_b_size;        // Firmware size in Slot B in bytes
+    uint32_t slot_b_crc32;       // IEEE 802.3 CRC32 checksum for Slot B
+    uint32_t update_pending;     // Pending activation flag
+    uint32_t boot_attempt_count; // Watchdog boot attempt counter
+} BootloaderMetadata_t;
+```
+
+#### OTA Command & Acknowledgment Opcodes
+
+| Opcode | Identifier | Direction | CAN DLC | Payload Layout |
+| --- | --- | --- | --- | --- |
+| `0x01` | `CMD_OTA_START` | GW $\rightarrow$ Dev | 8 | `[0]=0x01`, `[1..3]=size` (24-bit LE), `[4..7]=crc32` (32-bit LE) |
+| `0x81` | `ACK_OTA_START` | Dev $\rightarrow$ GW | 3 | `[0]=0x81`, `[1]=status` (`0x00`=OK, `0x01`=Err), `[2]=active_slot` (0/1) |
+| `0x02` | `CMD_OTA_DATA` | GW $\rightarrow$ Dev | 4..8 | `[0]=0x02`, `[1..2]=chunk_idx` (16-bit LE), `[3..7]=payload` (1..5 bytes) |
+| `0x82` | `ACK_OTA_DATA` | Dev $\rightarrow$ GW | 3 | `[0]=0x82`, `[1..2]=next_expected_chunk` (16-bit LE flow control) |
+| `0x03` | `CMD_OTA_VERIFY` | GW $\rightarrow$ Dev | 1 | `[0]=0x03` (Triggers target bank CRC32 hardware check) |
+| `0x83` | `ACK_OTA_VERIFY` | Dev $\rightarrow$ GW | 2 | `[0]=0x83`, `[1]=status` (`0x00`=CRC Valid, `0x01`=Mismatch) |
+| `0x04` | `CMD_OTA_ACTIVATE` | GW $\rightarrow$ Dev | 1 | `[0]=0x04` (Saves metadata, toggles slot, executes reset) |
+| `0x84` | `ACK_OTA_ACTIVATE` | Dev $\rightarrow$ GW | 1 | `[0]=0x84` (Reboot confirmation) |
+
+#### RAM Trigger & Entry Sequence
+
+1. During normal operation, the lock node listens on `0x780 | devId`.
+2. When `CMD_OTA_START` (`0x01`) is received, the running application writes `0xDEADBEEF` (`FITNET_OTA_TRIGGER_MAGIC`) to persistent RAM at `0x20007000` (`FITNET_OTA_TRIGGER_RAM_ADDR`) and executes `HAL_NVIC_SystemReset()`.
+3. The bootloader executes on startup, detects the RAM trigger, clears it, and enters dedicated OTA mode.
+4. Target bank erase (56 pages) executes, and `ACK_OTA_START` is emitted.
+5. The gateway streams 5-byte chunks paced at ~6 ms delay (`CMD_OTA_DATA`), acknowledged chunk-by-chunk by `ACK_OTA_DATA`.
+6. CRC32 is verified via `CMD_OTA_VERIFY` $\rightarrow$ `ACK_OTA_VERIFY`.
+7. `CMD_OTA_ACTIVATE` atomically toggles `active_slot`, writes metadata to Page 120, and reboots the target into the newly flashed slot.
 
 ---
 

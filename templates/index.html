@@ -29,6 +29,10 @@
                 </div>
             </div>
             <div class="flex items-center space-x-4">
+                <div class="flex items-center space-x-2 bg-indigo-50 px-3 py-1.5 rounded-full border border-indigo-200">
+                    <span class="text-xs text-gray-500 font-medium">Release:</span>
+                    <span id="dashboard-release-badge" class="font-mono text-xs font-bold text-indigo-700">None</span>
+                </div>
                 <div class="flex items-center space-x-2 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-200">
                     <span class="text-sm text-gray-600 font-medium">Master Beacon</span>
                     <span id="beacon-status" class="status-dot bg-gray-400"></span>
@@ -94,6 +98,9 @@
                     <div class="flex flex-col space-y-2 mt-auto">
                         <button onclick="if(confirm('Are you sure you want to wipe ALL whitelist slots on ALL online locks? This cannot be undone.')) globalWhitelistWipe()" class="w-full bg-red-700 hover:bg-red-800 text-white text-sm font-medium py-2 px-3 rounded shadow-sm transition-colors">Global Whitelist Wipe</button>
                         <button onclick="globalRebootAll()" class="w-full bg-orange-600 hover:bg-orange-700 text-white text-sm font-medium py-2 px-3 rounded shadow-sm transition-colors">Reboot All Devices</button>
+                        <button onclick="openGlobalOtaModal()" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium py-2 px-3 rounded shadow-sm transition-colors flex items-center justify-center space-x-1">
+                            <span>⚡ Update All Locks (OTA)</span>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -420,21 +427,131 @@
             </div>
         </div>
     </div>
+    <!-- OTA Firmware Update Modal -->
+    <div id="ota-modal" class="fixed inset-0 z-50 overflow-y-auto bg-gray-500 bg-opacity-75 flex items-center justify-center hidden">
+        <div class="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 text-left relative m-4">
+            <div class="flex justify-between items-center pb-3 border-b">
+                <div class="flex items-center space-x-2">
+                    <span class="text-amber-600 text-xl font-bold">⚡</span>
+                    <h3 class="text-lg font-bold text-gray-900" id="ota-modal-title">OTA Firmware Update</h3>
+                </div>
+                <button type="button" class="text-gray-400 hover:text-gray-500 focus:outline-none text-2xl font-bold" onclick="closeOtaModal()">&times;</button>
+            </div>
+
+            <div class="mt-4 space-y-4">
+                <div class="bg-amber-50 border-l-4 border-amber-400 p-3 rounded">
+                    <p class="text-xs text-amber-800" id="ota-modal-warning">
+                        Target device will reboot into the bootloader to erase and flash the secondary bank (50 kbit/s). Standard gateway telemetry will remain active.
+                    </p>
+                </div>
+
+                <!-- Unified .ota Bundle Dropzone / Selector -->
+                <div>
+                    <label class="block text-xs font-semibold text-gray-700 uppercase mb-1">Upload Firmware Package (.ota)</label>
+                    <div id="ota-dropzone" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleFileDrop(event)" onclick="document.getElementById('ota-file-input').click()" class="border-2 border-dashed border-gray-300 hover:border-indigo-500 bg-gray-50 hover:bg-indigo-50/40 rounded-lg p-3 text-center cursor-pointer transition-colors">
+                        <input type="file" id="ota-file-input" accept=".ota,.zip" class="hidden" onchange="handleFileSelect(event)">
+                        <div class="flex flex-col items-center justify-center space-y-1">
+                            <span class="text-xl">📦</span>
+                            <span class="text-xs font-medium text-gray-700">Drop <span class="font-mono text-indigo-600 font-bold">.ota</span> package here or click to browse</span>
+                            <span id="ota-upload-status-text" class="text-[10px] text-gray-400">Contains slot_a.bin, slot_b.bin, and manifest.json</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Clean Dual-Slot Information Card -->
+                <div class="space-y-3">
+                    <div id="ota-slot-card" class="bg-indigo-50/70 border border-indigo-200 rounded p-3 text-xs space-y-2">
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600 font-medium">Target:</span>
+                            <span id="ota-target-display" class="font-bold text-gray-900 font-mono">Schloss 1</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600 font-medium">Current Bank:</span>
+                            <span id="ota-active-bank-badge" class="font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800">Slot A</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600 font-medium">Target Bank:</span>
+                            <span id="ota-target-bank-badge" class="font-bold px-2 py-0.5 rounded bg-green-100 text-green-800">Slot B</span>
+                        </div>
+                        <div class="flex justify-between items-center border-t border-indigo-200 pt-2">
+                            <span class="text-gray-600 font-medium">Bundle Version:</span>
+                            <span id="ota-bundle-version-badge" class="font-mono font-bold text-indigo-700 bg-white px-2 py-0.5 rounded border border-indigo-200">None</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-gray-600 font-medium">Auto-Resolved Binary:</span>
+                            <span id="ota-resolved-binary-badge" class="font-mono font-bold text-gray-800 bg-white px-2 py-0.5 rounded border border-indigo-200">slot_b.bin</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Progress Section -->
+                <div id="ota-progress-section" class="border rounded p-4 bg-gray-50 space-y-2">
+                    <div class="flex justify-between items-center text-xs">
+                        <span class="font-semibold text-gray-700">Status: <span id="ota-state-badge" class="px-2 py-0.5 rounded text-xs font-bold bg-gray-200 text-gray-700">IDLE</span></span>
+                        <span id="ota-percentage-text" class="font-mono font-bold text-amber-700">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                        <div id="ota-progress-bar" class="bg-amber-500 h-3 rounded-full transition-all duration-200" style="width: 0%"></div>
+                    </div>
+                    <p id="ota-status-detail" class="text-xs text-gray-500 font-mono">Ready to initiate flash sequence.</p>
+                </div>
+
+                <div class="flex space-x-3 pt-2">
+                    <button id="ota-start-btn" onclick="executeOtaUpdate()" class="flex-1 bg-amber-600 hover:bg-amber-700 text-white py-2.5 px-4 rounded font-medium shadow-sm transition-colors text-sm flex items-center justify-center space-x-2">
+                        <span>Update Firmware</span>
+                    </button>
+                    <button id="ota-close-btn" type="button" onclick="closeOtaModal()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 py-2.5 px-4 rounded font-medium text-sm">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
 
     <!-- Toasts -->
     <div id="toast-container" class="fixed bottom-4 right-4 flex flex-col space-y-2 z-50 pointer-events-none"></div>
 
     <script>
         const API = {
-            async patch(url, body) { const res = await fetch(url, { method: 'PATCH', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined }); return res.json(); },
-            async post(url, body) { const res = await fetch(url, { method: 'POST', headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined }); return res.json(); },
-            async get(url) { const res = await fetch(url); return res.json(); },
-            async delete(url) { const res = await fetch(url, { method: 'DELETE' }); return res.json(); }
+            async patch(url, body) {
+                const res = await fetch(url, {
+                    method: 'PATCH',
+                    headers: body ? { 'Content-Type': 'application/json' } : {},
+                    body: body ? JSON.stringify(body) : undefined
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                return data;
+            },
+            async post(url, body) {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: body ? { 'Content-Type': 'application/json' } : {},
+                    body: body ? JSON.stringify(body) : undefined
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                return data;
+            },
+            async get(url) {
+                const res = await fetch(url);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                return data;
+            },
+            async delete(url) {
+                const res = await fetch(url, { method: 'DELETE' });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                return data;
+            }
         };
         let devices = [];
         let modalDeviceId = null;
         let activeTab = 'tab-signals';
         let previousScannedCard = {};
+        const otaUpdatingDevices = new Set();
         function showToast(message, type = 'info') {
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
@@ -639,7 +756,10 @@
             const vcc = health?.health_short?.vcc_mv ? (health.health_short.vcc_mv / 1000).toFixed(2) + 'V' : '--';
             const temp = health?.health_short?.temp_c !== undefined ? health.health_short.temp_c + '°C' : '--';
             const displayName = details.name || `Lock ${id}`;
-            const innerHTML = `<div class="px-4 py-3 border-b flex justify-between items-center rounded-t-lg transition-colors ${headerBg}">
+                    const isUpdating = otaUpdatingDevices.has(id);
+                    const disAttr = isUpdating ? 'disabled' : '';
+                    const disClass = isUpdating ? 'opacity-40 cursor-not-allowed pointer-events-none' : '';
+                    const innerHTML = `<div class="px-4 py-3 border-b flex justify-between items-center rounded-t-lg transition-colors ${headerBg}">
                     <h3 class="text-lg font-bold ${headerText}">${displayName}</h3><span class="text-xs font-semibold px-2 py-1 rounded-full ${labelClass}">${statusLabel}</span>
                 </div>
                 <div class="p-4 flex-1 flex flex-col space-y-3 bg-white rounded-b-lg">
@@ -677,11 +797,17 @@
                         </div>
                     </div>
                     <div class="grid grid-cols-3 gap-2 mt-2">
-                        <button onclick="deviceAction(${id}, 'open')" class="bg-blue-50 hover:bg-blue-100 text-blue-700 py-1.5 px-2 rounded border border-blue-200 text-xs font-medium">Open Pulse</button>
-                        <button onclick="deviceAction(${id}, 'open_hold')" class="bg-purple-50 hover:bg-purple-100 text-purple-700 py-1.5 px-2 rounded border border-purple-200 text-xs font-medium">Hold Open</button>
-                        <button onclick="deviceAction(${id}, 'reset')" class="bg-gray-100 hover:bg-gray-200 text-gray-800 py-1.5 px-2 rounded border border-gray-300 text-xs font-medium">Lock/Reset</button>
+                        <button ${disAttr} onclick="deviceAction(${id}, 'open')" class="bg-blue-50 hover:bg-blue-100 text-blue-700 py-1.5 px-2 rounded border border-blue-200 text-xs font-medium ${disClass}">Open Pulse</button>
+                        <button ${disAttr} onclick="deviceAction(${id}, 'open_hold')" class="bg-purple-50 hover:bg-purple-100 text-purple-700 py-1.5 px-2 rounded border border-purple-200 text-xs font-medium ${disClass}">Hold Open</button>
+                        <button ${disAttr} onclick="deviceAction(${id}, 'reset')" class="bg-gray-100 hover:bg-gray-200 text-gray-800 py-1.5 px-2 rounded border border-gray-300 text-xs font-medium ${disClass}">Lock/Reset</button>
                     </div>
-                    <button onclick="openModal(${id}, '${displayName.replace(/'/g, "\\'")}')" class="mt-2 w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 border border-indigo-200 rounded text-sm font-semibold transition-colors shadow-sm">Manage & Diagnostics</button>
+                    <div class="grid grid-cols-2 gap-2 mt-2">
+                        <button ${disAttr} onclick="openOtaModal(${id}, '${displayName.replace(/'/g, "\\'")}')" class="w-full bg-amber-50 hover:bg-amber-100 text-amber-800 py-2 border border-amber-300 rounded text-xs font-semibold transition-colors shadow-sm flex items-center justify-center space-x-1 ${disClass}">
+                            <span>⚡ OTA Update</span>
+                        </button>
+                        <button ${disAttr} onclick="openModal(${id}, '${displayName.replace(/'/g, "\\'")}')" class="w-full bg-indigo-50 hover:bg-indigo-100 text-indigo-700 py-2 border border-indigo-200 rounded text-xs font-semibold transition-colors shadow-sm ${disClass}">Manage & Diag</button>
+                    </div>
+                    ${isUpdating ? '<div class="ota-lockout-banner mt-2 bg-amber-100 text-amber-800 py-1.5 px-2 rounded text-xs font-bold text-center animate-pulse border border-amber-300">⚡ OTA Flashing Active (Controls Locked)</div>' : ''}
                 </div>`;
             if (!card) {
                 card = document.createElement('div');
@@ -691,7 +817,50 @@
                 grid.appendChild(card);
             } else if (card.innerHTML !== innerHTML) { card.innerHTML = innerHTML; }
         }
-        async function deviceAction(id, action) { try { await API.post(`/api/v1/devices/${id}/${action}`); showToast(`Action '${action}' sent to Lock ${id}`, 'success'); } catch (e) { showToast('Action failed', 'error'); } }
+        function setDeviceControlsLocked(id, locked) {
+            if (locked) {
+                otaUpdatingDevices.add(id);
+            } else {
+                otaUpdatingDevices.delete(id);
+            }
+            const card = document.querySelector(`[data-id="${id}"]`);
+            if (card) {
+                card.querySelectorAll('button').forEach(btn => {
+                    btn.disabled = locked;
+                    if (locked) {
+                        btn.classList.add('opacity-40', 'cursor-not-allowed', 'pointer-events-none');
+                    } else {
+                        btn.classList.remove('opacity-40', 'cursor-not-allowed', 'pointer-events-none');
+                    }
+                });
+                let banner = card.querySelector('.ota-lockout-banner');
+                if (locked && !banner) {
+                    banner = document.createElement('div');
+                    banner.className = 'ota-lockout-banner mt-2 bg-amber-100 text-amber-800 py-1.5 px-2 rounded text-xs font-bold text-center animate-pulse border border-amber-300';
+                    banner.innerText = '⚡ OTA Flashing Active (Controls Locked)';
+                    const container = card.querySelector('.p-4');
+                    if (container) container.appendChild(banner);
+                } else if (!locked && banner) {
+                    banner.remove();
+                }
+            }
+        }
+        async function deviceAction(id, action) {
+            if (otaUpdatingDevices.has(id)) {
+                showToast('Device is currently undergoing an OTA firmware update', 'warning');
+                return;
+            }
+            try {
+                await API.post(`/api/v1/devices/${id}/${action}`);
+                showToast(`Action '${action}' sent to Lock ${id}`, 'success');
+            } catch (e) {
+                if (e && (e.status === 503 || String(e).includes('503') || e.detail?.includes('OTA'))) {
+                    showToast('Device is currently undergoing an OTA firmware update', 'warning');
+                } else {
+                    showToast('Action failed', 'error');
+                }
+            }
+        }
         async function globalAction(action) {
             if (devices.length === 0) return; showToast(`Broadcasting ${action}...`, 'info');
             devices.forEach(d => { if(d.online) API.post(`/api/v1/devices/${d.device_id}/${action}`).catch(()=>{}); });
@@ -780,7 +949,17 @@
             }
         }
 
-        async function openModal(id, name) { modalDeviceId = id; document.getElementById('modal-dev-id').innerText = id; document.getElementById('modal-dev-name').innerText = name || `Lock ${id}`; document.getElementById('device-modal').classList.remove('hidden'); switchTab('tab-signals'); }
+        async function openModal(id, name) {
+            if (otaUpdatingDevices.has(id)) {
+                showToast('Device is currently undergoing an OTA firmware update', 'warning');
+                return;
+            }
+            modalDeviceId = id;
+            document.getElementById('modal-dev-id').innerText = id;
+            document.getElementById('modal-dev-name').innerText = name || `Lock ${id}`;
+            document.getElementById('device-modal').classList.remove('hidden');
+            switchTab('tab-signals');
+        }
         function closeModal() { document.getElementById('device-modal').classList.add('hidden'); modalDeviceId = null; }
         
         async function modalAction(action) { if(!modalDeviceId) return; try { await API.post(`/api/v1/devices/${modalDeviceId}/${action}`); showToast(`Action successful`, 'success'); } catch(e) { showToast('Error', 'error'); } }
@@ -907,8 +1086,414 @@
                 await refreshDiagnosticsData();
             } catch(e) {}
         }
+
+        // --- OTA Firmware Package & Release State ---
+        let currentRelease = null;
+
+        async function fetchCurrentRelease() {
+            try {
+                const res = await API.get('/api/v1/ota/release');
+                const dashBadge = document.getElementById('dashboard-release-badge');
+                const bundleBadge = document.getElementById('ota-bundle-version-badge');
+                if (res && res.has_release && res.version) {
+                    currentRelease = res;
+                    if (dashBadge) dashBadge.innerText = res.version;
+                    if (bundleBadge) bundleBadge.innerText = res.version;
+                } else {
+                    currentRelease = null;
+                    if (dashBadge) dashBadge.innerText = 'None';
+                    if (bundleBadge) bundleBadge.innerText = 'No release bundle';
+                }
+            } catch (e) {
+                console.error("Failed to fetch release info:", e);
+            }
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const dz = document.getElementById('ota-dropzone');
+            if (dz) dz.classList.add('border-indigo-500', 'bg-indigo-50');
+        }
+
+        function handleDragLeave(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const dz = document.getElementById('ota-dropzone');
+            if (dz) dz.classList.remove('border-indigo-500', 'bg-indigo-50');
+        }
+
+        function handleFileDrop(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            handleDragLeave(e);
+            if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                uploadOtaBundle(e.dataTransfer.files[0]);
+            }
+        }
+
+        function handleFileSelect(e) {
+            if (e.target && e.target.files && e.target.files.length > 0) {
+                uploadOtaBundle(e.target.files[0]);
+            }
+        }
+
+        async function uploadOtaBundle(file) {
+            if (!file.name.endsWith('.ota') && !file.name.endsWith('.zip')) {
+                showToast('Please upload a valid .ota firmware package', 'error');
+                return;
+            }
+
+            const statusText = document.getElementById('ota-upload-status-text');
+            if (statusText) statusText.innerText = `Uploading ${file.name}...`;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const res = await fetch('/api/v1/ota/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    throw new Error(data.detail || 'Upload failed');
+                }
+                showToast(`Firmware package ${data.version || ''} staged successfully!`, 'success');
+                if (statusText) statusText.innerText = `Active package: ${file.name} (${data.version})`;
+                await fetchCurrentRelease();
+            } catch (err) {
+                showToast(`Upload failed: ${err.message}`, 'error');
+                if (statusText) statusText.innerText = 'Upload failed. Try again.';
+            } finally {
+                const fileInput = document.getElementById('ota-file-input');
+                if (fileInput) fileInput.value = '';
+            }
+        }
+
+
+        // --- OTA Firmware Update Logic ---
+        let otaTargetMode = 'single';
+        let otaTargetDeviceId = null;
+        let otaSinglePollInterval = null;
+        let otaBatchPollInterval = null;
+        let otaFlashingInProgress = false;
+
+        function clearAllOtaPolling() {
+            if (otaSinglePollInterval) {
+                clearInterval(otaSinglePollInterval);
+                otaSinglePollInterval = null;
+            }
+            if (otaBatchPollInterval) {
+                clearInterval(otaBatchPollInterval);
+                otaBatchPollInterval = null;
+            }
+        }
+
+        async function openOtaModal(id, name) {
+            clearAllOtaPolling();
+            otaTargetMode = 'single';
+            otaTargetDeviceId = id;
+            otaFlashingInProgress = false;
+
+            document.getElementById('ota-modal-title').innerText = `OTA Firmware Update - ${name || 'Schloss ' + id}`;
+            document.getElementById('ota-target-display').innerText = `${name || 'Schloss ' + id} (Node ID: ${id})`;
+            document.getElementById('ota-modal-warning').innerText = `Target Lock ${id} will reboot into bootloader to erase and flash secondary slot (50 kbit/s). Standard telemetry on other devices continues without interruption.`;
+            document.getElementById('ota-slot-card').classList.remove('hidden');
+
+            resetOtaProgress();
+
+            const btn = document.getElementById('ota-start-btn');
+            btn.innerHTML = '<span>Update Firmware</span>';
+            btn.disabled = false;
+            btn.classList.remove('opacity-75', 'cursor-not-allowed');
+            btn.classList.add('hover:bg-amber-700');
+
+            await fetchCurrentRelease();
+
+            // Query fresh device info and status to automatically detect active bank
+            try {
+                const dev = await API.get(`/api/v1/devices/${id}`);
+                const activeSlot = dev.active_slot ?? 0;
+                updateSlotDisplay(activeSlot);
+
+                const status = await API.get(`/api/v1/devices/${id}/ota/status`);
+                if (status.active_slot !== undefined) {
+                    updateSlotDisplay(status.active_slot);
+                }
+                if (['ERASE', 'FLASH', 'VERIFY'].includes(status.state)) {
+                    otaFlashingInProgress = true;
+                    btn.disabled = true;
+                    btn.classList.add('opacity-75', 'cursor-not-allowed');
+                    btn.classList.remove('hover:bg-amber-700');
+                    btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg><span>Flashing in Progress...</span>`;
+                    applyOtaProgress(status);
+                    startOtaPolling(id);
+                } else {
+                    resetOtaProgress();
+                }
+            } catch (e) {
+                console.error("Failed to query fresh device info for OTA modal:", e);
+                const dev = devices.find(d => d.device_id === id);
+                updateSlotDisplay(dev?.active_slot ?? 0);
+                resetOtaProgress();
+            }
+
+            document.getElementById('ota-modal').classList.remove('hidden');
+        }
+
+        function updateSlotDisplay(activeSlot) {
+            const activeBadge = document.getElementById('ota-active-bank-badge');
+            const targetBadge = document.getElementById('ota-target-bank-badge');
+            const bundleBadge = document.getElementById('ota-bundle-version-badge');
+            const binaryBadge = document.getElementById('ota-resolved-binary-badge');
+
+            if (activeSlot === 0) {
+                if (activeBadge) {
+                    activeBadge.innerText = 'Slot A (0x08004000)';
+                    activeBadge.className = 'font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800';
+                }
+                if (targetBadge) {
+                    targetBadge.innerText = 'Slot B (0x08020000)';
+                    targetBadge.className = 'font-bold px-2 py-0.5 rounded bg-green-100 text-green-800';
+                }
+                if (binaryBadge) binaryBadge.innerText = 'slot_b.bin';
+            } else {
+                if (activeBadge) {
+                    activeBadge.innerText = 'Slot B (0x08020000)';
+                    activeBadge.className = 'font-bold px-2 py-0.5 rounded bg-green-100 text-green-800';
+                }
+                if (targetBadge) {
+                    targetBadge.innerText = 'Slot A (0x08004000)';
+                    targetBadge.className = 'font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800';
+                }
+                if (binaryBadge) binaryBadge.innerText = 'slot_a.bin';
+            }
+            if (currentRelease && currentRelease.version) {
+                if (bundleBadge) bundleBadge.innerText = currentRelease.version;
+            }
+        }
+
+        function openGlobalOtaModal() {
+            const onlineDevs = devices.filter(d => d.online);
+            if (onlineDevs.length === 0) {
+                showToast('No online locks detected for batch update.', 'warning');
+                return;
+            }
+            clearAllOtaPolling();
+            otaTargetMode = 'batch';
+            otaTargetDeviceId = null;
+            otaFlashingInProgress = false;
+
+            document.getElementById('ota-modal-title').innerText = 'Global OTA Update (All Locks)';
+            document.getElementById('ota-target-display').innerText = `All Online Locks (${onlineDevs.map(d => d.device_id).join(', ')})`;
+            document.getElementById('ota-modal-warning').innerText = 'WARNING: All online devices will be sequentially flashed one by one into their respective opposite slot. Do not power cycle locks during update.';
+            document.getElementById('ota-slot-card').classList.add('hidden');
+
+            resetOtaProgress();
+
+            const btn = document.getElementById('ota-start-btn');
+            btn.innerHTML = `<span>Batch Flash ${onlineDevs.length} Locks</span>`;
+            btn.disabled = false;
+            btn.classList.remove('opacity-75', 'cursor-not-allowed');
+            btn.classList.add('hover:bg-amber-700');
+
+            document.getElementById('ota-modal').classList.remove('hidden');
+        }
+
+        function closeOtaModal() {
+            if (otaFlashingInProgress) {
+                if (!confirm("Flashing is currently active in the background. Close modal view?")) return;
+            }
+            clearAllOtaPolling();
+            document.getElementById('ota-modal').classList.add('hidden');
+        }
+
+        function resetOtaProgress() {
+            document.getElementById('ota-percentage-text').innerText = '0%';
+            document.getElementById('ota-progress-bar').style.width = '0%';
+            document.getElementById('ota-progress-bar').className = 'bg-amber-500 h-3 rounded-full transition-all duration-200';
+            updateOtaStateBadge('IDLE');
+            document.getElementById('ota-status-detail').innerText = 'Ready to initiate flash sequence.';
+        }
+
+        function updateOtaStateBadge(state) {
+            const badge = document.getElementById('ota-state-badge');
+            badge.innerText = state;
+            badge.className = 'px-2 py-0.5 rounded text-xs font-bold ';
+            if (state === 'ERASE') badge.className += 'bg-yellow-100 text-yellow-800';
+            else if (state === 'FLASH') badge.className += 'bg-blue-100 text-blue-800';
+            else if (state === 'VERIFY') badge.className += 'bg-purple-100 text-purple-800';
+            else if (state === 'COMPLETE') badge.className += 'bg-green-100 text-green-800';
+            else if (state === 'ERROR') badge.className += 'bg-red-100 text-red-800';
+            else badge.className += 'bg-gray-200 text-gray-700';
+        }
+
+        async function executeOtaUpdate() {
+            if (otaFlashingInProgress) return;
+            const btn = document.getElementById('ota-start-btn');
+            if (btn.disabled) return;
+
+            otaFlashingInProgress = true;
+            btn.disabled = true;
+            btn.classList.add('opacity-75', 'cursor-not-allowed');
+            btn.classList.remove('hover:bg-amber-700');
+            btn.innerHTML = `<svg class="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg><span>Flashing in Progress...</span>`;
+
+            if (otaTargetMode === 'single') {
+                setDeviceControlsLocked(otaTargetDeviceId, true);
+                try {
+                    console.log(`Starting single OTA for Schloss ${otaTargetDeviceId}`);
+                    await API.post(`/api/v1/devices/${otaTargetDeviceId}/ota/start`, { binary_path: "auto" });
+                    showToast(`OTA initiated for Schloss ${otaTargetDeviceId}`, 'info');
+                    startOtaPolling(otaTargetDeviceId);
+                } catch (err) {
+                    console.error("Single OTA start error:", err);
+                    otaFlashingInProgress = false;
+                    setDeviceControlsLocked(otaTargetDeviceId, false);
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                    btn.classList.add('hover:bg-amber-700');
+                    btn.innerHTML = '<span>Update Firmware</span>';
+                    showToast('Failed to trigger OTA: ' + (err.message || 'Unknown error'), 'error');
+                }
+            } else {
+                const onlineDevs = devices.filter(d => d.online).map(d => d.device_id);
+                if (onlineDevs.length === 0) {
+                    showToast('No online locks detected for batch update.', 'warning');
+                    otaFlashingInProgress = false;
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                    btn.classList.add('hover:bg-amber-700');
+                    btn.innerHTML = `<span>Batch Flash 0 Locks</span>`;
+                    return;
+                }
+                if (!confirm(`Are you sure you want to sequentially flash all ${onlineDevs.length} locks?`)) {
+                    otaFlashingInProgress = false;
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                    btn.classList.add('hover:bg-amber-700');
+                    btn.innerHTML = `<span>Batch Flash ${onlineDevs.length} Locks</span>`;
+                    return;
+                }
+                onlineDevs.forEach(id => setDeviceControlsLocked(id, true));
+                try {
+                    console.log("Calling /api/v1/ota/batch/start with device IDs:", onlineDevs);
+                    const res = await API.post('/api/v1/ota/batch/start', { device_ids: onlineDevs, binary_path: "auto" });
+                    console.log("Batch OTA started response:", res);
+                    showToast(`Batch OTA started for ${onlineDevs.length} locks`, 'info');
+                    startBatchOtaPolling(onlineDevs);
+                } catch (err) {
+                    console.error("Batch OTA start error:", err);
+                    otaFlashingInProgress = false;
+                    onlineDevs.forEach(id => setDeviceControlsLocked(id, false));
+                    btn.disabled = false;
+                    btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                    btn.classList.add('hover:bg-amber-700');
+                    btn.innerHTML = `<span>Batch Flash ${onlineDevs.length} Locks</span>`;
+                    showToast('Batch trigger failed: ' + (err.message || 'Unknown error'), 'error');
+                }
+            }
+        }
+
+        function startOtaPolling(deviceId) {
+            clearAllOtaPolling();
+            otaSinglePollInterval = setInterval(async () => {
+                try {
+                    const status = await API.get(`/api/v1/devices/${deviceId}/ota/status`);
+                    applyOtaProgress(status);
+                    if (status.state === 'COMPLETE' || status.state === 'ERROR') {
+                        clearAllOtaPolling();
+                        otaFlashingInProgress = false;
+                        setDeviceControlsLocked(deviceId, false);
+
+                        const btn = document.getElementById('ota-start-btn');
+                        btn.disabled = false;
+                        btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                        btn.classList.add('hover:bg-amber-700');
+                        btn.innerHTML = '<span>Update Firmware</span>';
+
+                        if (status.state === 'COMPLETE') {
+                            showToast(`Schloss ${deviceId} updated and rebooted successfully!`, 'success');
+                            if (status.active_slot !== undefined) {
+                                updateSlotDisplay(status.active_slot);
+                            }
+                            API.post(`/api/v1/devices/${deviceId}/buzzer`, { sound: 1, repeat: 1 }).catch(() => {});
+                        } else {
+                            showToast(`OTA failed on Schloss ${deviceId}: ${status.error || 'Unknown error'}`, 'error');
+                        }
+                    }
+                } catch (err) {
+                    console.error("OTA status polling error:", err);
+                }
+            }, 300);
+        }
+
+        function startBatchOtaPolling(deviceIds) {
+            clearAllOtaPolling();
+            otaBatchPollInterval = setInterval(async () => {
+                try {
+                    const batchStatus = await API.get('/api/v1/ota/batch/status');
+
+                    if (batchStatus.current_device_id) {
+                        const targetId = batchStatus.current_device_id;
+                        document.getElementById('ota-target-display').innerText = `Batch Flashing: Schloss ${targetId} (${batchStatus.current_index + 1}/${batchStatus.total_devices})`;
+                        try {
+                            const devStatus = await API.get(`/api/v1/devices/${targetId}/ota/status`);
+                            applyOtaProgress(devStatus);
+                        } catch (e) {}
+                    }
+
+                    if (!batchStatus.running) {
+                        clearAllOtaPolling();
+                        otaFlashingInProgress = false;
+                        deviceIds.forEach(id => setDeviceControlsLocked(id, false));
+
+                        const btn = document.getElementById('ota-start-btn');
+                        btn.disabled = false;
+                        btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                        btn.classList.add('hover:bg-amber-700');
+                        btn.innerHTML = `<span>Batch Flash ${deviceIds.length} Locks</span>`;
+
+                        if (batchStatus.failed_devices && batchStatus.failed_devices.length > 0) {
+                            showToast(`Batch OTA finished with errors on: ${batchStatus.failed_devices.join(', ')}`, 'error');
+                        } else {
+                            showToast(`Batch OTA sequence completed successfully for all ${deviceIds.length} locks!`, 'success');
+                            if (batchStatus.completed_devices) {
+                                batchStatus.completed_devices.forEach(devId => {
+                                    API.post(`/api/v1/devices/${devId}/buzzer`, { sound: 1, repeat: 1 }).catch(() => {});
+                                });
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.error("Batch polling error:", err);
+                }
+            }, 400);
+        }
+
+        function applyOtaProgress(status) {
+            const pct = status.progress || 0;
+            const state = status.state || 'IDLE';
+            document.getElementById('ota-percentage-text').innerText = `${pct}%`;
+            document.getElementById('ota-progress-bar').style.width = `${pct}%`;
+            updateOtaStateBadge(state);
+
+            let detailMsg = `State: ${state} (${pct}%)`;
+            if (state === 'ERASE') detailMsg = 'Erasing secondary flash page bank...';
+            else if (state === 'FLASH') detailMsg = `Streaming 5-byte chunks (${pct}% paced at 50 kbit/s)...`;
+            else if (state === 'VERIFY') detailMsg = 'Verifying dual-bank CRC32 integrity...';
+            else if (state === 'COMPLETE') detailMsg = 'Firmware active! Device rebooted.';
+            else if (state === 'ERROR') detailMsg = `Error: ${status.error || 'Flashing aborted.'}`;
+
+            document.getElementById('ota-status-detail').innerText = detailMsg;
+        }
+
+
         setupSSE();
         fetchInitialLogs();
+        fetchCurrentRelease();
+
     </script>
 
 </body>

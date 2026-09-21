@@ -8,6 +8,8 @@ and health information.
 
 import struct
 from dataclasses import dataclass
+from typing import Optional
+
 
 from .protocol import CANFrame
 from .constants import *
@@ -71,6 +73,7 @@ class HealthSecurityStatus:
 class HealthVersionInfo:
     device_id: int
     version_str: str
+    active_slot: Optional[int] = None
 
 @dataclass(slots=True)
 class HealthDeviceInfo:
@@ -89,6 +92,7 @@ class StatusBasic:
     lock_id: int
     lock_state: int
     lock_error: int
+    active_slot: Optional[int] = None
 
 
 @dataclass(slots=True)
@@ -249,12 +253,13 @@ class CANParser:
             sub = data[0]
 
             if sub == STATUS_BASIC and len(data) >= 4:
-
+                active_slot = data[4] if len(data) >= 5 else None
                 return StatusBasic(
                     device_id=dev_id,
                     lock_id=data[1],
                     lock_state=data[2],
                     lock_error=data[3],
+                    active_slot=active_slot,
                 )
 
             if sub == STATUS_COMMAND_ACK and len(data) >= 4:
@@ -368,7 +373,8 @@ class CANParser:
                     return HealthExtended(device_id=dev_id, free_ram=ram, uptime_s=uptime)
                 elif sub == HEALTH_VERSION and len(data) >= 4:
                     version_str = f"{data[1]}.{data[2]}.{data[3]}"
-                    return HealthVersionInfo(device_id=dev_id, version_str=version_str)
+                    active_slot = data[6] if len(data) >= 7 and data[6] in (0, 1) else None
+                    return HealthVersionInfo(device_id=dev_id, version_str=version_str, active_slot=active_slot)
                 elif sub == HEALTH_DEVICE_INFO and len(data) >= 5:
                     hw_info_str = f"Type:{data[3]} Rev:{data[4]}"
                     door_close_guard_supported = False

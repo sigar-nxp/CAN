@@ -18,3 +18,6 @@ pslocks.db
 # Log Files & Directories
 *.log
 logs/
+
+# OTA Uploads
+uploads/

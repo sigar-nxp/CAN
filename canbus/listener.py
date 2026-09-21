@@ -15,7 +15,10 @@ from datetime import datetime
 
 from database.database import SessionLocal
 from models.log import EventLog
+from models.device import Device
 
+
+from .protocol import CANFrame
 from .service import CANService
 from .parser import CANParser, StatusBasic, HealthStatus, StatusError, CommandAck, IdRequest, UIDPart1, UIDPart2, StatusRFID, StatusRFIDPart2, EventWlAutoDelete, HealthVersionInfo, HealthDeviceInfo, HealthShort, HealthExtended, HealthDiagInfo, HealthSecurityStatus, WlInfoReport, LockModeReport, WlListV2Item, WlListV2UidPart1, WlListV2UidPart2, OccupancyStateReport, OccupancyOwnerShort, PolicyActionReport, RuntimeStateSnapshot, DiagExtended
 
@@ -80,6 +83,7 @@ class DeviceState:
         self.lock_mode_behavior_flags: int = 0
         self.door_warning_delay_s: int = 2
         self.door_release_delay_s: int = 5
+        self.active_slot: int = 0
         self.runtime_state: Dict[str, Any] = {}
         self.diag_extended: Dict[str, Any] = {}
 
@@ -152,6 +156,7 @@ class DeviceState:
             "lock_mode": self.lock_mode,
             "auto_close_timeout": self.auto_close_timeout,
             "occupancy_state": self.occupancy_state,
+            "active_slot": self.active_slot,
         }
 
 
@@ -232,9 +237,8 @@ class CANListener:
             return
         self.preload_devices_from_db()
         self.running = True
-        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.can.register_callback(self.handle_frame)
         self.log_thread = threading.Thread(target=self._log_worker, daemon=True)
-        self.thread.start()
         self.log_thread.start()
 
     def preload_devices_from_db(self):
@@ -250,6 +254,7 @@ class CANListener:
                     dev.lock_mode = db_dev.lock_mode
                     dev.auto_close_timeout = db_dev.auto_close_timeout
                     dev.lock_mode_behavior_flags = db_dev.behavior_flags
+                    dev.active_slot = getattr(db_dev, "active_slot", 0) or 0
                     dev.last_seen = db_dev.last_seen
                     self.devices[db_dev.device_id] = dev
         print(f"Preloaded {len(self.devices)} devices from database.")
@@ -271,6 +276,7 @@ class CANListener:
                             self.devices[device_id].lock_mode = db_dev.lock_mode
                             self.devices[device_id].auto_close_timeout = db_dev.auto_close_timeout
                             self.devices[device_id].lock_mode_behavior_flags = db_dev.behavior_flags
+                            self.devices[device_id].active_slot = getattr(db_dev, "active_slot", 0) or 0
                             self.devices[device_id].last_seen = db_dev.last_seen
                         else:
                             new_dev = Device(
@@ -279,6 +285,7 @@ class CANListener:
                                 lock_mode=1,
                                 auto_close_timeout=3,
                                 behavior_flags=0,
+                                active_slot=0,
                                 last_seen=time.time()
                             )
                             db.add(new_dev)
@@ -294,23 +301,24 @@ class CANListener:
 
     def stop(self):
         self.running = False
-        if self.thread:
+        self.can.unregister_callback(self.handle_frame)
+        if hasattr(self, 'thread') and self.thread:
             self.thread.join(timeout=2.0)
         self.log_queue.put(None)
         if self.log_thread:
             self.log_thread.join(timeout=2.0)
 
     def _loop(self):
-        while self.running:
-            try:
-                frame = self.can.receive(timeout=0.5)
-                if frame is None:
-                    continue
+        """Legacy placeholder; frame reception is driven by CANManager."""
+        pass
 
-                msg = self.parser.parse(frame)
-                if msg is None:
-                    continue
-
+    def handle_frame(self, frame: CANFrame) -> None:
+        """Processes an incoming CAN frame dispatched from CANManager."""
+        if not self.running or frame is None:
+            return
+        try:
+            msg = self.parser.parse(frame)
+            if msg is not None:
                 dev_id = frame.device_id
 
                 if isinstance(msg, StatusBasic):
@@ -329,6 +337,17 @@ class CANListener:
                                 self.add_log(dev_id, "ERROR", None, f"Error changed to {dev.error_text}")
                             else:
                                 self.add_log(dev_id, "LOCK_STATUS", None, "Error cleared")
+
+                        if msg.active_slot is not None and msg.active_slot in (0, 1):
+                            dev.active_slot = msg.active_slot
+                            try:
+                                with SessionLocal() as db:
+                                    db_dev = db.query(Device).filter(Device.device_id == dev_id).first()
+                                    if db_dev and db_dev.active_slot != msg.active_slot:
+                                        db_dev.active_slot = msg.active_slot
+                                        db.commit()
+                            except Exception as ex:
+                                print(f"Failed to persist active_slot from StatusBasic: {ex}")
                                 
                         dev.last_seen = time.time()
                 elif isinstance(msg, HealthStatus):
@@ -377,6 +396,17 @@ class CANListener:
                     dev = self.get_device(dev_id)
                     with self.lock:
                         dev.firmware_version = msg.version_str
+                        if msg.active_slot is not None and msg.active_slot in (0, 1):
+                            if dev.active_slot != msg.active_slot:
+                                dev.active_slot = msg.active_slot
+                                try:
+                                    with SessionLocal() as db:
+                                        db_dev = db.query(Device).filter(Device.device_id == dev_id).first()
+                                        if db_dev:
+                                            db_dev.active_slot = msg.active_slot
+                                            db.commit()
+                                except Exception as ex:
+                                    print(f"Failed to persist active_slot from version info: {ex}")
                         dev.last_seen = time.time()
                 elif isinstance(msg, HealthDeviceInfo):
                     dev = self.get_device(dev_id)
@@ -557,6 +587,5 @@ class CANListener:
                         dev.last_seen = time.time()
 
 
-            except Exception as e:
-                print(f"CANListener error: {e}")
-                time.sleep(1)
+        except Exception as e:
+            print(f"CANListener handle_frame error: {e}")

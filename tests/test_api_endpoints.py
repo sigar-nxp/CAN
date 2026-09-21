@@ -85,3 +85,10 @@ class TestAPIEndpoints(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "factory reset")
         mock_factory_reset.assert_called_once_with(25)
+
+    @patch("services.ota_service.ota_service.is_task_running", return_value=True)
+    def test_open_device_locked_during_ota(self, mock_ota_running):
+        response = self.client.post("/api/v1/devices/5/open")
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("undergoing an OTA firmware update", response.json()["detail"])
+

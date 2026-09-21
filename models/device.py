@@ -28,4 +28,5 @@ class Device(Base):
     lock_mode = Column(Integer, default=1)
     auto_close_timeout = Column(Integer, default=3)
     behavior_flags = Column(Integer, default=0)
+    active_slot = Column(Integer, default=0)
     last_seen = Column(Float, default=time.time)
