@@ -8,7 +8,9 @@ gateway telemetry.
 """
 
 import asyncio
+import json
 import logging
+import time
 
 import binascii
 import errno
@@ -218,6 +220,51 @@ class OTAService:
             except asyncio.TimeoutError:
                 return None
 
+    def _detect_bundle_version(self, binary_path: str) -> str:
+        """Helper to determine bundle version from file path or latest_release.json."""
+        try:
+            normalized = os.path.normpath(binary_path)
+            parts = normalized.split(os.sep)
+            if "releases" in parts:
+                idx = parts.index("releases")
+                if idx + 1 < len(parts) and parts[idx + 1] != os.path.basename(binary_path):
+                    return parts[idx + 1]
+
+            latest_rel_path = os.path.join(
+                os.path.dirname(os.path.dirname(__file__)),
+                "uploads",
+                "releases",
+                "latest_release.json",
+            )
+            if os.path.isfile(latest_rel_path):
+                with open(latest_rel_path, "r", encoding="utf-8") as f:
+                    rel_data = json.load(f)
+                    if "version" in rel_data:
+                        return rel_data["version"]
+        except Exception as ex:
+            logger.debug(f"Could not detect bundle version: {ex}")
+        return "unknown"
+
+    def _safe_record_audit_log(
+        self,
+        device_id: int,
+        action: str,
+        details: Dict[str, Any],
+    ) -> None:
+        """
+        Safely records an OTA audit log event via can_listener.add_log().
+        Guarantees that database or logging errors never interrupt the physical CAN flashing.
+        """
+        try:
+            details_str = json.dumps(details)
+            can_listener.add_log(
+                device_id=device_id,
+                event_type=action,
+                details=details_str,
+            )
+        except Exception as ex:
+            logger.error(f"Failed to record audit log {action} for device {device_id}: {ex}")
+
     async def flash_device(
         self,
         device_id: int,
@@ -228,19 +275,43 @@ class OTAService:
         Executes an asynchronous OTA firmware flash sequence for a single device.
         Phases: ERASE -> FLASH -> VERIFY -> COMPLETE.
         """
+        start_time = time.time()
+        stage = "PRECHECK"
+        progress = 0
+
+        # Determine slot metadata and bundle version for OTA_START audit log
+        dev = can_listener.get_device(device_id) if can_listener else None
+        curr_slot = getattr(dev, "active_slot", 0) or 0
+        target_slot = 1 if curr_slot == 0 else 0
+        if binary_path.endswith("slot_a.bin"):
+            target_slot = 0
+            curr_slot = 1
+        elif binary_path.endswith("slot_b.bin"):
+            target_slot = 1
+            curr_slot = 0
+
+        bundle_version = self._detect_bundle_version(binary_path)
+
+        self._safe_record_audit_log(
+            device_id=device_id,
+            action="OTA_START",
+            details={
+                "current_slot": curr_slot,
+                "target_slot": target_slot,
+                "version": bundle_version,
+                "binary_name": os.path.basename(binary_path),
+            },
+        )
+
         try:
             if not os.path.exists(binary_path):
-                err = f"Binary file not found: {binary_path}"
-                self._update_status(device_id, 0, "ERROR", error=err, callback=progress_callback)
-                return False
+                raise FileNotFoundError(f"Binary file not found: {binary_path}")
 
             try:
                 with open(binary_path, "rb") as f:
                     fw_data = bytearray(f.read())
             except Exception as ex:
-                err = f"Failed to read binary: {ex}"
-                self._update_status(device_id, 0, "ERROR", error=err, callback=progress_callback)
-                return False
+                raise IOError(f"Failed to read binary: {ex}")
 
             # Pad firmware payload to 8-byte boundary
             if len(fw_data) % 8 != 0:
@@ -258,8 +329,9 @@ class OTAService:
                 except asyncio.QueueEmpty:
                     break
 
-
             # 1. ERASE Phase: Transmit CMD_OTA_START and wait for flash erase completion
+            stage = "ERASE"
+            progress = 0
             self._update_status(device_id, 0, "ERASE", callback=progress_callback)
             start_payload = bytes(
                 [CMD_OTA_START, size & 0xFF, (size >> 8) & 0xFF, (size >> 16) & 0xFF]
@@ -294,11 +366,11 @@ class OTAService:
                     break
 
             if not connected:
-                err = "Bootloader connection/erase timeout (15s exceeded)"
-                self._update_status(device_id, 0, "ERROR", error=err, callback=progress_callback)
-                return False
+                raise TimeoutError("Bootloader connection/erase timeout (15s exceeded)")
 
             # 2. FLASH Phase: Stream chunks with physical layer pacing
+            stage = "FLASH"
+            progress = 0
             self._update_status(device_id, 0, "FLASH", callback=progress_callback)
             chunk_idx = 0
             offset = 0
@@ -325,9 +397,8 @@ class OTAService:
                     await asyncio.sleep(self.pacing_delay * (1 + attempt * 0.5))
 
                 if not chunk_ack:
-                    err = f"Failed transmitting chunk index {chunk_idx}"
-                    self._update_status(device_id, int(offset * 100 / size), "ERROR", error=err, callback=progress_callback)
-                    return False
+                    progress = int(offset * 100 / size)
+                    raise RuntimeError(f"Failed transmitting chunk index {chunk_idx}")
 
                 offset += len(chunk_data)
                 chunk_idx += 1
@@ -336,10 +407,13 @@ class OTAService:
                     await asyncio.sleep(self.pacing_delay)
 
                 progress_pct = int(offset * 100 / size)
+                progress = progress_pct
                 if chunk_idx % 25 == 0 or offset >= size:
                     self._update_status(device_id, progress_pct, "FLASH", callback=progress_callback)
 
             # 3. VERIFY Phase: Verify target slot CRC32
+            stage = "VERIFY"
+            progress = 100
             self._update_status(device_id, 100, "VERIFY", callback=progress_callback)
             verify_msg = CANFrame(arbitration_id=cmd_id, data=bytes([CMD_OTA_VERIFY]))
             for _ in range(5):
@@ -351,11 +425,11 @@ class OTAService:
 
             ack_verify = await self._wait_for_ack(queue, ACK_OTA_VERIFY, timeout=3.0)
             if not ack_verify or len(ack_verify.data) < 2 or ack_verify.data[1] != 0:
-                err = "CRC32 verification check failed on target device"
-                self._update_status(device_id, 100, "ERROR", error=err, callback=progress_callback)
-                return False
+                raise RuntimeError("CRC32 verification check failed on target device")
 
             # 4. ACTIVATE Phase: Switch active slot and trigger reset
+            stage = "ACTIVATE"
+            self._update_status(device_id, 98, "ACTIVATE", callback=progress_callback)
             act_msg = CANFrame(arbitration_id=cmd_id, data=bytes([CMD_OTA_ACTIVATE]))
             for _ in range(5):
                 try:
@@ -388,6 +462,20 @@ class OTAService:
 
             self._update_status(device_id, 100, "COMPLETE", callback=progress_callback)
 
+            # Record OTA_SUCCESS audit log entry
+            duration = time.time() - start_time
+            self._safe_record_audit_log(
+                device_id=device_id,
+                action="OTA_SUCCESS",
+                details={
+                    "active_slot": new_slot,
+                    "crc32": f"0x{crc32:08X}",
+                    "binary_name": os.path.basename(binary_path),
+                    "execution_time": f"{duration:.2f}s",
+                    "duration_s": round(duration, 2),
+                },
+            )
+
             # Emit confirmation buzzer after brief activation wait
             try:
                 await asyncio.sleep(1.2)
@@ -399,7 +487,18 @@ class OTAService:
             return True
 
         except Exception as ex:
-            self._update_status(device_id, 0, "ERROR", error=str(ex), callback=progress_callback)
+            duration = time.time() - start_time
+            self._safe_record_audit_log(
+                device_id=device_id,
+                action="OTA_FAILED",
+                details={
+                    "stage": stage,
+                    "error": str(ex),
+                    "binary_name": os.path.basename(binary_path) if binary_path else "unknown",
+                    "execution_time": f"{duration:.2f}s",
+                },
+            )
+            self._update_status(device_id, progress, "ERROR", error=str(ex), callback=progress_callback)
             return False
         finally:
             can_service.clear_ota_queue(device_id)
@@ -429,6 +528,15 @@ class OTAService:
                     target_file = self.resolve_target_binary(dev_id, binary_path)
                     success = await self.flash_device(dev_id, target_file)
                 except Exception as ex:
+                    self._safe_record_audit_log(
+                        device_id=dev_id,
+                        action="OTA_FAILED",
+                        details={
+                            "stage": "RESOLVE",
+                            "error": str(ex),
+                            "binary_name": os.path.basename(binary_path) if binary_path else "auto",
+                        },
+                    )
                     self._update_status(dev_id, 0, "ERROR", error=str(ex))
                     success = False
 

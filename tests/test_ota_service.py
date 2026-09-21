@@ -91,6 +91,222 @@ class TestOTAService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final_status["state"], "COMPLETE")
         self.assertEqual(final_status["progress"], 100)
 
+        # Verify DB audit records for OTA_START and OTA_SUCCESS
+        from database.database import SessionLocal
+        from models.log import EventLog
+        import json
+
+        with SessionLocal() as db:
+            logs = (
+                db.query(EventLog)
+                .filter(EventLog.device_id == dev_id, EventLog.event_type.in_(["OTA_START", "OTA_SUCCESS"]))
+                .order_by(EventLog.id.asc())
+                .all()
+            )
+            self.assertGreaterEqual(len(logs), 2)
+            start_log = [l for l in logs if l.event_type == "OTA_START"][-1]
+            success_log = [l for l in logs if l.event_type == "OTA_SUCCESS"][-1]
+
+            self.assertIsNotNone(start_log)
+            start_details = json.loads(start_log.details)
+            self.assertIn("target_slot", start_details)
+            self.assertIn("binary_name", start_details)
+            self.assertIn("version", start_details)
+
+            self.assertIsNotNone(success_log)
+            success_details = json.loads(success_log.details)
+            self.assertIn("active_slot", success_details)
+            self.assertIn("crc32", success_details)
+            self.assertIn("execution_time", success_details)
+
+    async def test_flash_device_failure_records_audit_log(self):
+        """Verify that OTA failure records OTA_START and OTA_FAILED in DB audit logs."""
+        dev_id = 42
+        non_existent_binary = "/tmp/non_existent_fw_test_file.bin"
+
+        success = await ota_service.flash_device(dev_id, non_existent_binary)
+        self.assertFalse(success)
+
+        final_status = ota_service.get_status(dev_id)
+        self.assertEqual(final_status["state"], "ERROR")
+
+        from database.database import SessionLocal
+        from models.log import EventLog
+        import json
+
+        with SessionLocal() as db:
+            logs = (
+                db.query(EventLog)
+                .filter(EventLog.device_id == dev_id)
+                .order_by(EventLog.id.asc())
+                .all()
+            )
+            event_types = [l.event_type for l in logs]
+            self.assertIn("OTA_START", event_types)
+            self.assertIn("OTA_FAILED", event_types)
+
+            failed_log = [l for l in logs if l.event_type == "OTA_FAILED"][-1]
+            details = json.loads(failed_log.details)
+            self.assertEqual(details["stage"], "PRECHECK")
+            self.assertIn("Binary file not found", details["error"])
+            self.assertIn("execution_time", details)
+
+    async def test_flash_device_verify_failure_records_audit_log(self):
+        """Verify that a verify-stage CRC mismatch logs OTA_FAILED with stage=VERIFY."""
+        dev_id = 99
+        ack_id = FITNET_CAN_ID_OTA_ACK_BASE | dev_id
+
+        async def fail_responder():
+            queue = can_service.get_ota_queue(dev_id)
+            expected_chunk = 0
+
+            while True:
+                status = ota_service.get_status(dev_id)
+                if status["state"] in ("COMPLETE", "ERROR"):
+                    break
+
+                if status["state"] == "ERASE":
+                    frame = CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_START, 0x00]))
+                    await queue.put(frame)
+                    await asyncio.sleep(0.05)
+
+                elif status["state"] == "FLASH":
+                    expected_chunk += 1
+                    exp_bytes = struct.pack("<H", expected_chunk)
+                    frame = CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_DATA]) + exp_bytes)
+                    await queue.put(frame)
+                    await asyncio.sleep(0.01)
+
+                elif status["state"] == "VERIFY":
+                    # Send verification failure (status != 0)
+                    frame = CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_VERIFY, 0x01]))
+                    await queue.put(frame)
+                    break
+
+                await asyncio.sleep(0.02)
+
+        resp_task = asyncio.create_task(fail_responder())
+        success = await ota_service.flash_device(dev_id, self.temp_bin.name)
+        await resp_task
+
+        self.assertFalse(success)
+        final_status = ota_service.get_status(dev_id)
+        self.assertEqual(final_status["state"], "ERROR")
+
+        from database.database import SessionLocal
+        from models.log import EventLog
+        import json
+
+        with SessionLocal() as db:
+            failed_log = (
+                db.query(EventLog)
+                .filter(EventLog.device_id == dev_id, EventLog.event_type == "OTA_FAILED")
+                .order_by(EventLog.id.desc())
+                .first()
+            )
+            self.assertIsNotNone(failed_log)
+            details = json.loads(failed_log.details)
+            self.assertEqual(details["stage"], "VERIFY")
+            self.assertIn("CRC32 verification", details["error"])
+
+    async def test_batch_ota_records_audit_logs(self):
+        """Verify sequential batch OTA update records audit logs for all targets."""
+        dev_ids = [101, 102]
+
+        async def responder():
+            for dev_id in dev_ids:
+                ack_id = FITNET_CAN_ID_OTA_ACK_BASE | dev_id
+                queue = can_service.get_ota_queue(dev_id)
+                expected_chunk = 0
+                while True:
+                    status = ota_service.get_status(dev_id)
+                    if status["state"] in ("COMPLETE", "ERROR"):
+                        break
+                    if status["state"] == "ERASE":
+                        await queue.put(CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_START, 0x00])))
+                        await asyncio.sleep(0.02)
+                    elif status["state"] == "FLASH":
+                        expected_chunk += 1
+                        exp_bytes = struct.pack("<H", expected_chunk)
+                        await queue.put(CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_DATA]) + exp_bytes))
+                        await asyncio.sleep(0.01)
+                    elif status["state"] == "VERIFY":
+                        await queue.put(CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_VERIFY, 0x00])))
+                        await asyncio.sleep(0.02)
+                    elif status["state"] == "ACTIVATE":
+                        await queue.put(CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_ACTIVATE, 0x00])))
+                        break
+                    await asyncio.sleep(0.01)
+
+        resp_task = asyncio.create_task(responder())
+        results = await ota_service.flash_all_devices(dev_ids, self.temp_bin.name)
+        await resp_task
+
+        self.assertEqual(len(results), 2)
+        self.assertTrue(results[101])
+        self.assertTrue(results[102])
+
+        from database.database import SessionLocal
+        from models.log import EventLog
+
+        with SessionLocal() as db:
+            for dev_id in dev_ids:
+                logs = (
+                    db.query(EventLog)
+                    .filter(EventLog.device_id == dev_id)
+                    .all()
+                )
+                types = [l.event_type for l in logs]
+                self.assertIn("OTA_START", types)
+                self.assertIn("OTA_SUCCESS", types)
+
+    @patch("services.ota_service.can_listener.add_log", side_effect=Exception("DB connection broken"))
+    async def test_db_logging_failure_does_not_interrupt_flash(self, mock_add_log):
+        """Verify database write issues never interrupt physical CAN flash execution."""
+        dev_id = 7
+        ack_id = FITNET_CAN_ID_OTA_ACK_BASE | dev_id
+
+        async def responder():
+            queue = can_service.get_ota_queue(dev_id)
+            expected_chunk = 0
+
+            while True:
+                status = ota_service.get_status(dev_id)
+                if status["state"] in ("COMPLETE", "ERROR"):
+                    break
+
+                if status["state"] == "ERASE":
+                    frame = CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_START, 0x00]))
+                    await queue.put(frame)
+                    await asyncio.sleep(0.05)
+
+                elif status["state"] == "FLASH":
+                    expected_chunk += 1
+                    exp_bytes = struct.pack("<H", expected_chunk)
+                    frame = CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_DATA]) + exp_bytes)
+                    await queue.put(frame)
+                    await asyncio.sleep(0.01)
+
+                elif status["state"] == "VERIFY":
+                    frame = CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_VERIFY, 0x00]))
+                    await queue.put(frame)
+                    await asyncio.sleep(0.05)
+
+                elif status["state"] == "ACTIVATE":
+                    frame = CANFrame(arbitration_id=ack_id, data=bytes([ACK_OTA_ACTIVATE, 0x00]))
+                    await queue.put(frame)
+                    break
+
+                await asyncio.sleep(0.02)
+
+        resp_task = asyncio.create_task(responder())
+        success = await ota_service.flash_device(dev_id, self.temp_bin.name)
+        await resp_task
+
+        self.assertTrue(success)
+        final_status = ota_service.get_status(dev_id)
+        self.assertEqual(final_status["state"], "COMPLETE")
+
 
 class TestOTAEndpoints(unittest.TestCase):
     @classmethod

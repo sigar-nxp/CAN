@@ -582,6 +582,11 @@
         }
         
         function getEventBadgeClass(eventType) {
+            if (!eventType) return 'bg-gray-100 text-gray-800';
+            if (eventType === 'OTA_START') return 'bg-purple-100 text-purple-800 border border-purple-300 font-bold';
+            if (eventType === 'OTA_SUCCESS') return 'bg-blue-100 text-blue-800 border border-blue-300 font-bold';
+            if (eventType === 'OTA_FAILED') return 'bg-red-100 text-red-800 border border-red-300 font-bold';
+            if (eventType.startsWith('OTA_') || eventType.includes('OTA')) return 'bg-indigo-100 text-indigo-800 border border-indigo-300 font-bold';
             if (eventType.includes('GRANTED')) return 'bg-green-100 text-green-800';
             if (eventType.includes('DENIED') || eventType.includes('ERROR') || eventType.includes('ALARM')) return 'bg-red-100 text-red-800';
             if (eventType.includes('MANUAL')) return 'bg-purple-100 text-purple-800';
@@ -589,17 +594,34 @@
             return 'bg-gray-100 text-gray-800';
         }
         
+        function formatLogDetails(details) {
+            if (!details) return '-';
+            if (typeof details === 'string' && (details.startsWith('{') || details.startsWith('['))) {
+                try {
+                    const parsed = JSON.parse(details);
+                    return Object.entries(parsed).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`).join(' | ');
+                } catch (e) {
+                    return details;
+                }
+            }
+            return details;
+        }
+
         function renderLogTableRow(log) {
             const tr = document.createElement('tr');
             tr.className = 'hover:bg-gray-50 transition-colors';
             tr.dataset.id = log.id;
             
+            const rawDetails = log.details || '';
+            const displayDetails = formatLogDetails(rawDetails);
+            const safeTitle = (rawDetails || '').replace(/"/g, '&quot;');
+
             tr.innerHTML = `
                 <td class="px-5 py-3 text-gray-500 font-mono text-xs">${formatLogTime(log.timestamp)}</td>
                 <td class="px-5 py-3 font-medium text-gray-800">${log.device_name || `Lock ${log.device_id}`}</td>
-                <td class="px-5 py-3"><span class="px-2 py-1 rounded-full text-xs font-semibold ${getEventBadgeClass(log.event_type)}">${log.event_type}</span></td>
+                <td class="px-5 py-3"><span class="px-2.5 py-1 rounded-full text-xs font-semibold ${getEventBadgeClass(log.event_type)}">${log.event_type}</span></td>
                 <td class="px-5 py-3 font-mono text-gray-600">${log.card_uid || '-'}</td>
-                <td class="px-5 py-3 text-gray-600 max-w-xs truncate" title="${log.details || ''}">${log.details || '-'}</td>
+                <td class="px-5 py-3 text-gray-600 max-w-xs truncate" title="${safeTitle}">${displayDetails}</td>
             `;
             return tr;
         }

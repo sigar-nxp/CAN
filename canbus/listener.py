@@ -181,6 +181,27 @@ class CANListener:
         self.recent_logs = []
         self.log_thread = None
 
+    def _persist_log_entry(self, db, item: Dict[str, Any]):
+        log_entry = EventLog(**item)
+        db.add(log_entry)
+        db.commit()
+        db.refresh(log_entry)
+        
+        log_dict = {
+            "id": log_entry.id,
+            "timestamp": log_entry.timestamp.isoformat() + "Z",
+            "device_id": log_entry.device_id,
+            "device_name": log_entry.device_name,
+            "event_type": log_entry.event_type,
+            "card_uid": log_entry.card_uid,
+            "details": log_entry.details
+        }
+        with self.lock:
+            self.recent_logs.append(log_dict)
+            if len(self.recent_logs) > 200:
+                self.recent_logs = self.recent_logs[-100:]
+        return log_entry
+
     def _log_worker(self):
         with SessionLocal() as db:
             while self.running:
@@ -188,24 +209,7 @@ class CANListener:
                 if item is None:
                     break
                 try:
-                    log_entry = EventLog(**item)
-                    db.add(log_entry)
-                    db.commit()
-                    db.refresh(log_entry)
-                    
-                    log_dict = {
-                        "id": log_entry.id,
-                        "timestamp": log_entry.timestamp.isoformat() + "Z",
-                        "device_id": log_entry.device_id,
-                        "device_name": log_entry.device_name,
-                        "event_type": log_entry.event_type,
-                        "card_uid": log_entry.card_uid,
-                        "details": log_entry.details
-                    }
-                    with self.lock:
-                        self.recent_logs.append(log_dict)
-                        if len(self.recent_logs) > 200:
-                            self.recent_logs = self.recent_logs[-100:]
+                    self._persist_log_entry(db, item)
                 except Exception as e:
                     logger.error(f"Log worker error: {e}")
                     db.rollback()
@@ -214,13 +218,21 @@ class CANListener:
         device_name = f"Lock {device_id}"
         if device_id in self.devices:
             device_name = self.devices[device_id].name
-        self.log_queue.put({
+        item = {
             "device_id": device_id,
             "device_name": device_name,
             "event_type": event_type,
             "card_uid": card_uid,
             "details": details
-        })
+        }
+        if self.running and self.log_thread and self.log_thread.is_alive():
+            self.log_queue.put(item)
+        else:
+            try:
+                with SessionLocal() as db:
+                    self._persist_log_entry(db, item)
+            except Exception as e:
+                logger.error(f"Direct log persist error: {e}")
 
     def clear_uid_parts(self):
         with self.lock:
