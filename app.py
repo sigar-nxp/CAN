@@ -3,12 +3,12 @@ Main application entry point for the PS Locks Open Integration Platform.
 
 Initializes the FastAPI application, sets up routing, ensures database
 tables are created, and manages background service lifecycles (CAN bus
-listener and Master Beacon) via startup/shutdown events.
+listener and Master Beacon) via a structured FastAPI lifespan context manager.
 """
 
 import asyncio
-from datetime import datetime
-import platform
+from contextlib import asynccontextmanager
+import logging
 import os
 
 from fastapi import FastAPI, Request
@@ -21,21 +21,51 @@ from config.globals import can_service, can_listener, beacon_service
 from api.stream import router as stream_router
 from routers.ota import router as ota_router
 
-
 # Import models to ensure they are registered with Base.metadata
 from models.device import Device
 from models.log import EventLog
 from api.logs import router as logs_router
 
+logger = logging.getLogger(__name__)
+
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Manage the lifecycle of background services.
+
+    Initializes the centralized CAN manager with the active event loop,
+    and starts the background reader, device listener, and Master Beacon.
+    Upon application shutdown, gracefully terminates all CAN services.
+    """
+    logger.info("Initializing PS Locks OIP services...")
+    try:
+        loop = asyncio.get_running_loop()
+        can_service.set_loop(loop)
+    except RuntimeError:
+        pass
+
+    can_service.start()
+    can_listener.start()
+    beacon_service.start()
+    yield
+
+    logger.info("Shutting down PS Locks OIP services...")
+    can_listener.stop()
+    beacon_service.stop()
+    can_service.stop()
 
 
 app = FastAPI(
     title="PS Locks Open Integration Platform",
     description="Open Integration Platform für Zutrittskontrolle und Gebäudeautomation",
-    version="0.3.0"
+    version="0.3.0",
+    lifespan=lifespan,
 )
+
 
 @app.get("/")
 def root(request: Request):
@@ -48,37 +78,6 @@ def root(request: Request):
         "project": "PS Locks OIP",
         "status": "online"
     }
-
-
-@app.on_event("startup")
-def startup():
-    """
-    Startup event handler for FastAPI.
-    
-    Initializes the centralized CANManager with the running event loop,
-    starts the background reader, device listener, and Master Beacon.
-    """
-    print("PS Locks OIP gestartet")
-    try:
-        loop = asyncio.get_running_loop()
-        can_service.set_loop(loop)
-    except RuntimeError:
-        pass
-    can_service.start()
-    can_listener.start()
-    beacon_service.start()
-
-@app.on_event("shutdown")
-def shutdown():
-    """
-    Shutdown event handler for FastAPI.
-    
-    Gracefully stops the CAN listener, the Master Beacon background
-    service, and the central CAN manager.
-    """
-    can_listener.stop()
-    beacon_service.stop()
-    can_service.stop()
 
 
 app.include_router(
@@ -106,3 +105,4 @@ app.include_router(
 app.include_router(
     ota_router
 )
+

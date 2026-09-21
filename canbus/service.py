@@ -7,6 +7,8 @@ and asynchronous routing of OTA bootloader frames into per-device asyncio queues
 
 import asyncio
 import errno
+import logging
+
 import threading
 import time
 from typing import Callable, Dict, List, Optional
@@ -20,6 +22,9 @@ from .constants import (
     FITNET_CAN_ID_OTA_DEVICE_MASK,
 )
 from .protocol import CANFrame
+logger = logging.getLogger(__name__)
+
+
 
 
 class CANManager:
@@ -74,7 +79,7 @@ class CANManager:
                 )
             except Exception as ex:
                 self.bus = None
-                print(f"CANManager connect error: {ex}")
+                logger.error(f"CANManager connect error: {ex}")
 
     def set_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """Sets the active asyncio event loop for threadsafe queue routing."""
@@ -196,7 +201,7 @@ class CANManager:
             try:
                 callback(frame)
             except Exception as ex:
-                print(f"CANManager callback exception: {ex}")
+                logger.error(f"CANManager callback exception: {ex}")
 
     def send(
         self,

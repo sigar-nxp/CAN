@@ -8,6 +8,8 @@ gateway telemetry.
 """
 
 import asyncio
+import logging
+
 import binascii
 import errno
 import os
@@ -30,6 +32,9 @@ from canbus.constants import (
 )
 from canbus.protocol import CANFrame
 from config.globals import can_service, can_listener
+logger = logging.getLogger(__name__)
+
+
 
 
 class OTAService:
@@ -139,7 +144,7 @@ class OTAService:
                     if os.path.isfile(candidate_path):
                         return os.path.abspath(candidate_path)
             except Exception as ex:
-                print(f"Warning: Failed reading latest_release.json: {ex}")
+                logger.warning(f"Failed reading latest_release.json: {ex}")
 
         return self._find_binary_file(target_name)
 
@@ -192,7 +197,7 @@ class OTAService:
                 if asyncio.iscoroutine(res):
                     asyncio.create_task(res)
             except Exception as ex:
-                print(f"OTA status callback error: {ex}")
+                logger.error(f"OTA status callback error: {ex}")
 
     async def _wait_for_ack(
         self,
@@ -376,7 +381,7 @@ class OTAService:
                         db_dev.active_slot = new_slot
                         db.commit()
             except Exception as ex:
-                print(f"Failed to persist active_slot: {ex}")
+                logger.error(f"Failed to persist active_slot: {ex}")
 
             # Clear OTA queue so operational commands and confirmation buzzer can be transmitted
             can_service.clear_ota_queue(device_id)
@@ -389,7 +394,7 @@ class OTAService:
                 from canbus.commands import buzz_play
                 can_service.send(buzz_play(device_id, 1, 1))
             except Exception as ex:
-                print(f"Confirmation buzzer error: {ex}")
+                logger.error(f"Confirmation buzzer error: {ex}")
 
             return True
 

@@ -145,7 +145,20 @@ def led_set(
     ttl: int = 5,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Constructs an LED configuration command.
 
+    Args:
+        device_id (int): Target node ID.
+        mode (int): LED mode identifier (e.g., LED_GREEN, LED_RED).
+        period10ms (int): Blink period in units of 10 ms (default 100 = 1 s).
+        duty (int): PWM duty cycle in percent (0-100, default 50).
+        ttl (int): Time-to-live in seconds before auto-off (default 5 s).
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     return _frame(
         CAN_COMMAND | device_id,
         [
@@ -164,7 +177,16 @@ def led_reset(
     device_id: int,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Constructs an LED reset command to turn off active optical indicators.
 
+    Args:
+        device_id (int): Target node ID.
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     return _frame(
         CAN_COMMAND | device_id,
         [
@@ -185,7 +207,18 @@ def buzz_play(
     repeat: int = 1,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Constructs an acoustic buzzer playback command.
 
+    Args:
+        device_id (int): Target node ID.
+        sound (int): Sound pattern identifier (e.g., BUZZ_OK, BUZZ_DENY).
+        repeat (int): Number of repetition cycles.
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     return _frame(
         CAN_COMMAND | device_id,
         [
@@ -202,7 +235,16 @@ def buzz_stop(
     device_id: int,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Constructs an acoustic buzzer stop command.
 
+    Args:
+        device_id (int): Target node ID.
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     return _frame(
         CAN_COMMAND | device_id,
         [
@@ -221,7 +263,16 @@ def device_reset(
     device_id: int,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Constructs a software reboot command for the target device.
 
+    Args:
+        device_id (int): Target node ID.
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     return _frame(
         CAN_COMMAND | device_id,
         [
@@ -236,7 +287,16 @@ def factory_reset(
     device_id: int,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Constructs a factory reset command restoring default settings and unprovisioning the node.
 
+    Args:
+        device_id (int): Target node ID.
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     return _frame(
         CAN_COMMAND | device_id,
         [
@@ -251,7 +311,16 @@ def request_health(
     device_id: int,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Constructs a diagnostic health telemetry request.
 
+    Args:
+        device_id (int): Target node ID.
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     return _frame(
         CAN_COMMAND | device_id,
         [
@@ -266,7 +335,16 @@ def request_version(
     device_id: int,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Constructs a firmware version query command.
 
+    Args:
+        device_id (int): Target node ID.
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     return _frame(
         CAN_COMMAND | device_id,
         [
@@ -281,7 +359,16 @@ def request_device_info(
     device_id: int,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Constructs a hardware info query command.
 
+    Args:
+        device_id (int): Target node ID.
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     return _frame(
         CAN_COMMAND | device_id,
         [
@@ -301,9 +388,19 @@ def request_full_uid(
     corr_id: Optional[int] = None,
     lock_id: int = 0,
 ) -> CANFrame:
+    """
+    Requests the full hardware unique ID for an unprovisioned node using its 32-bit broadcast UID.
 
+    Args:
+        uid32 (bytes): 4-byte truncated unique ID.
+        corr_id (Optional[int]): Correlation ID.
+        lock_id (int): Logical lock index.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     if len(uid32) != 4:
-        raise ValueError("uid32 muss 4 Byte haben.")
+        raise ValueError("uid32 must be 4 bytes.")
 
     if corr_id is None:
         corr_id = _next_corr_id()
@@ -322,12 +419,23 @@ def request_full_uid(
 def assign_id(
     uid32: bytes,
     new_device_id: int,
-    bitrate_code: int = BITRATE_50K,   #For production change to 50K. This is just for testing with current Test Hardware
+    bitrate_code: int = BITRATE_50K,
     flags: int = 0,
 ) -> CANFrame:
+    """
+    Assigns a persistent device ID and CAN bus bitrate to an unprovisioned node.
 
+    Args:
+        uid32 (bytes): 4-byte truncated unique ID matching the target node.
+        new_device_id (int): Assigned node ID (1-126).
+        bitrate_code (int): Configured CAN bitrate (default BITRATE_50K).
+        flags (int): Configuration flags.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
+    """
     if len(uid32) != 4:
-        raise ValueError("uid32 muss 4 Byte haben.")
+        raise ValueError("uid32 must be 4 bytes.")
 
     return _frame(
         CAN_MASTER | DEFAULT_DEVICE_ID,
@@ -351,7 +459,19 @@ def build_master_beacon_frame(
     flags: int = 0,
 ) -> CANFrame:
     """
-    Constructs the Master Beacon frame (0xB0) on 0x47F.
+    Constructs the Master Beacon frame (0xB0) on CAN ID 0x47F.
+
+    Args:
+        version (int): Protocol version.
+        role (int): Master role identifier.
+        state (int): Master synchronization state.
+        interval_ms (int): Heartbeat interval in milliseconds.
+        failover_ms (int): Failover timeout in milliseconds.
+        takeover_ms (int): Master takeover timeout in milliseconds.
+        flags (int): Control flags.
+
+    Returns:
+        CANFrame: The constructed CAN frame.
     """
     return _frame(
         CAN_MASTER | DEFAULT_DEVICE_ID,
@@ -374,12 +494,17 @@ def build_master_beacon_frame(
 # ---------------------------------------------------------
 
 def request_wl_info(device_id: int, lock_id: int = 0) -> CANFrame:
+    """Requests whitelist memory utilization and slot capacity."""
     return _frame(CAN_COMMAND | device_id, [lock_id, REQUEST_WL_INFO, _next_corr_id()])
 
+
 def request_wl_list_v2(device_id: int, start_index: int = 1, page_size: int = 32, lock_id: int = 0) -> CANFrame:
+    """Requests a paged list of stored whitelist entries."""
     return _frame(CAN_COMMAND | device_id, [lock_id, REQUEST_WL_LIST_V2, _next_corr_id(), start_index, page_size])
 
+
 def wl_write_uid(device_id: int, slot_index: int, uid_len: int, uid_bytes: bytes, lock_id: int = 0) -> CANFrame:
+    """Writes the first part of a whitelist entry (slot, length, and UID bytes 0-2)."""
     corr_id = _next_corr_id()
     payload = [lock_id, WL_WRITE_UID, corr_id, slot_index, uid_len]
     payload.extend(list(uid_bytes[:3]))
@@ -387,7 +512,9 @@ def wl_write_uid(device_id: int, slot_index: int, uid_len: int, uid_bytes: bytes
         payload.append(0)
     return _frame(CAN_COMMAND | device_id, payload)
 
+
 def wl_write_uid_part2(device_id: int, uid_bytes: bytes, ttl_days: int = 0, lock_id: int = 0) -> CANFrame:
+    """Writes the remaining bytes (bytes 3-6) and TTL of a whitelist entry."""
     corr_id = _next_corr_id()
     payload = [lock_id, WL_WRITE_UID_PART2, corr_id]
     payload.extend(list(uid_bytes[3:7]))
@@ -396,23 +523,57 @@ def wl_write_uid_part2(device_id: int, uid_bytes: bytes, ttl_days: int = 0, lock
     payload.append(ttl_days)
     return _frame(CAN_COMMAND | device_id, payload)
 
+
 def delete_wl_slot(device_id: int, slot_index: int, lock_id: int = 0) -> CANFrame:
+    """Deletes the whitelist entry stored at the specified slot index."""
     return _frame(CAN_COMMAND | device_id, [lock_id, DELETE_WL_SLOT, _next_corr_id(), slot_index])
 
+
 def wl_clear(device_id: int, lock_id: int = 0) -> CANFrame:
+    """Clears all stored whitelist entries in persistent memory."""
     return _frame(CAN_COMMAND | device_id, [lock_id, WL_CLEAR, _next_corr_id()])
 
+
 def set_wl_slot_policy(device_id: int, slot_index: int, policy: int, open_action: int, flags: int = 0, lock_id: int = 0) -> CANFrame:
+    """Configures access policy and door opening action for a specific whitelist slot."""
     return _frame(CAN_COMMAND | device_id, [lock_id, SET_WL_SLOT_POLICY, _next_corr_id(), slot_index, policy, open_action, flags])
 
-def set_lock_mode(device_id: int, lock_mode: int, auto_close_timeout_s: int = 3, behavior_flags: int = 0, door_warning_delay_s: int = 2, door_release_delay_s: int = 5, lock_id: int = 0) -> CANFrame:
-    return _frame(CAN_COMMAND | device_id, [lock_id, SET_LOCK_MODE, _next_corr_id(), lock_mode, auto_close_timeout_s, behavior_flags, door_warning_delay_s, door_release_delay_s])
+
+def set_lock_mode(
+    device_id: int,
+    lock_mode: int,
+    auto_close_timeout_s: int = 3,
+    behavior_flags: int = 0,
+    door_warning_delay_s: int = 2,
+    door_release_delay_s: int = 5,
+    lock_id: int = 0,
+) -> CANFrame:
+    """Configures the lock operating mode (Standard, Auto-Close, Office) and timeout parameters."""
+    return _frame(
+        CAN_COMMAND | device_id,
+        [
+            lock_id,
+            SET_LOCK_MODE,
+            _next_corr_id(),
+            lock_mode,
+            auto_close_timeout_s,
+            behavior_flags,
+            door_warning_delay_s,
+            door_release_delay_s,
+        ],
+    )
+
 
 def request_lock_mode(device_id: int, lock_id: int = 0) -> CANFrame:
+    """Requests current lock operating mode configuration."""
     return _frame(CAN_COMMAND | device_id, [lock_id, REQUEST_LOCK_MODE, _next_corr_id()])
 
+
 def request_occupancy_state(device_id: int, lock_id: int = 0) -> CANFrame:
+    """Requests locker occupancy status telemetry."""
     return _frame(CAN_COMMAND | device_id, [lock_id, REQUEST_OCCUPANCY_STATE, _next_corr_id()])
 
+
 def auth_resp(device_id: int, result: int, action: int, lock_id: int = 0) -> CANFrame:
+    """Sends host authorization response for an online card access challenge."""
     return _frame(CAN_COMMAND | device_id, [lock_id, AUTH_RESP, _next_corr_id(), result, action])

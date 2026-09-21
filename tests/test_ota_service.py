@@ -97,6 +97,18 @@ class TestOTAEndpoints(unittest.TestCase):
     def setUpClass(cls):
         cls.client = TestClient(app)
 
+    @classmethod
+    def tearDownClass(cls):
+        from routers.ota import UPLOAD_DIRECTORY
+        for fn in ["test_fw.bin", "slot_a.bin", "slot_b.bin"]:
+            p = os.path.join(UPLOAD_DIRECTORY, fn)
+            if os.path.exists(p) and os.path.isfile(p):
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+
     def test_upload_endpoint(self):
         """Test staging firmware binary via POST /api/ota/upload."""
         file_content = b"\x00\x01\x02\x03\x04\x05\x06\x07"

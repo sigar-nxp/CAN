@@ -21,6 +21,7 @@ from .constants import *
 
 @dataclass(slots=True)
 class StatusRFID:
+    """Decoded RFID card tap event (Part 1, bytes 0-3 of UID)."""
     device_id: int
     lock_id: int
     action_type: int
@@ -31,29 +32,38 @@ class StatusRFID:
 
 @dataclass(slots=True)
 class StatusRFIDPart2:
+    """Supplementary frame for 7-byte / 10-byte card UIDs (bytes 4-9)."""
     device_id: int
     lock_id: int
     uid_part2: bytes
 
+
 @dataclass(slots=True)
 class EventWlAutoDelete:
+    """Notification of expired ephemeral whitelist slot deletion."""
     device_id: int
     lock_id: int
 
+
 @dataclass(slots=True)
 class HealthShort:
+    """Primary telemetry packet: supply voltage (mV) and MCU temperature (°C)."""
     device_id: int
     vcc_mv: int
     temp_c: int
 
+
 @dataclass(slots=True)
 class HealthExtended:
+    """Secondary telemetry packet: available RAM heap (bytes) and uptime (s)."""
     device_id: int
     free_ram: int
     uptime_s: int
 
+
 @dataclass(slots=True)
 class HealthDiagInfo:
+    """Hardware diagnostics: reset flags, brownout/watchdog counters, and CAN error flags."""
     device_id: int
     reset_reason: int
     brownout_cnt: int
@@ -61,33 +71,43 @@ class HealthDiagInfo:
     can_tx_err: int
     can_rx_err: int
 
+
 @dataclass(slots=True)
 class HealthSecurityStatus:
+    """Security and cryptographic subsystem status report."""
     device_id: int
     state: int
     supported: int
     pending: int
     last_counter: int
 
+
 @dataclass(slots=True)
 class HealthVersionInfo:
+    """Firmware version string and currently active execution flash bank/slot."""
     device_id: int
     version_str: str
     active_slot: Optional[int] = None
 
+
 @dataclass(slots=True)
 class HealthDeviceInfo:
+    """Hardware type, PCB revision, and capability flags (e.g. Door Close Guard)."""
     device_id: int
     hw_info_str: str
     door_close_guard_supported: bool = False
 
+
 @dataclass(slots=True)
 class IdRequest:
+    """Unprovisioned node discovery broadcast containing the 32-bit hardware UID."""
     device_id: int
     uid32: bytes
 
+
 @dataclass(slots=True)
 class StatusBasic:
+    """Primary lock state report (physical state, error code, and active flash slot)."""
     device_id: int
     lock_id: int
     lock_state: int
@@ -97,6 +117,7 @@ class StatusBasic:
 
 @dataclass(slots=True)
 class CommandAck:
+    """Command acknowledgment frame confirming execution and correlation ID."""
     device_id: int
     lock_id: int
     command: int
@@ -105,6 +126,7 @@ class CommandAck:
 
 @dataclass(slots=True)
 class StatusError:
+    """Error frame returned when a command is rejected or execution fails."""
     device_id: int
     error_code: int
     lock_id: int = 0
@@ -114,30 +136,35 @@ class StatusError:
 
 @dataclass(slots=True)
 class UIDPart1:
+    """First chunk of 64-bit/96-bit MCU UID."""
     device_id: int
     uid: bytes
 
 
 @dataclass(slots=True)
 class UIDPart2:
+    """Second chunk of 64-bit/96-bit MCU UID."""
     device_id: int
     uid: bytes
 
 
 @dataclass(slots=True)
 class HealthStatus:
+    """Raw unparsed health telemetry frame payload."""
     device_id: int
     data: bytes
 
 
 @dataclass(slots=True)
 class VersionInfo:
+    """Raw version frame payload."""
     device_id: int
     data: bytes
 
 
 @dataclass(slots=True)
 class DeviceInfo:
+    """Raw device info frame payload."""
     device_id: int
     data: bytes
 
@@ -149,13 +176,16 @@ class DeviceInfo:
 
 @dataclass(slots=True)
 class WlInfoReport:
+    """Whitelist storage allocation report (used slots, max capacity, active ephemeral entries)."""
     device_id: int
     used_persistent_slots: int
     max_persistent_capacity: int
     ephemeral_active: int
 
+
 @dataclass(slots=True)
 class LockModeReport:
+    """Configured operating mode and timing parameters (auto-close, door warning/release delays)."""
     device_id: int
     lock_mode: int
     auto_close_timeout_s: int
@@ -163,8 +193,10 @@ class LockModeReport:
     door_warning_delay_s: int = 2
     door_release_delay_s: int = 5
 
+
 @dataclass(slots=True)
 class RuntimeStateSnapshot:
+    """Real-time lock hardware snapshot: state revision, occupancy, errors, and LED status."""
     device_id: int
     lock_id: int
     physical_state: int
@@ -174,16 +206,20 @@ class RuntimeStateSnapshot:
     led_remaining_s: int
     state_revision: int
 
+
 @dataclass(slots=True)
 class DiagExtended:
+    """Extended diagnostic report tracking bus-off events and recovery stages."""
     device_id: int
     lock_id: int
     bus_off_counter: int
     last_recovery_stage: int
     diag_flags: int
 
+
 @dataclass(slots=True)
 class WlListV2Item:
+    """Whitelist slot header entry: slot index, entry type, UID length, policy, action, TTL."""
     device_id: int
     slot_index: int
     entry_type: int
@@ -192,38 +228,49 @@ class WlListV2Item:
     open_action: int
     ttl_days: int
 
+
 @dataclass(slots=True)
 class WlListV2UidPart1:
+    """Whitelist slot UID bytes 0-3."""
     device_id: int
     slot_index: int
     uid_bytes: bytes
+
 
 @dataclass(slots=True)
 class WlListV2UidPart2:
+    """Whitelist slot UID bytes 4-9."""
     device_id: int
     slot_index: int
     uid_bytes: bytes
 
+
 @dataclass(slots=True)
 class OccupancyStateReport:
+    """Locker occupancy status telemetry: occupancy flag, owner present flag, and counter."""
     device_id: int
     occupied: bool
     owner_present: bool
     source: int
     state_counter_24: int
 
+
 @dataclass(slots=True)
 class OccupancyOwnerShort:
+    """Truncated owner UID (first 4 bytes) for currently assigned locker occupant."""
     device_id: int
     owner_uid_short: bytes
 
+
 @dataclass(slots=True)
 class PolicyActionReport:
+    """Outcome report for local policy evaluation upon card presentation."""
     device_id: int
     policy: int
     open_action: int
     local_result: int
     occupancy_effect: int
+
 
 class CANParser:
 

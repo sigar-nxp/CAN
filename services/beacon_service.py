@@ -7,10 +7,15 @@ control signals (like Master Failover/Takeover) to all locks on the bus.
 """
 
 import threading
+import logging
+
 import can
 
 from canbus.commands import build_master_beacon_frame
 from canbus.service import CANService
+logger = logging.getLogger(__name__)
+
+
 
 class BeaconService:
     def __init__(self, can_service: CANService):
@@ -47,9 +52,9 @@ class BeaconService:
                 self.can.send(frame)
                 self.total_beacons_sent += 1
             except can.CanError as e:
-                print(f"BeaconService CAN error: {e}")
+                logger.error(f"BeaconService CAN error: {e}")
             except Exception as e:
-                print(f"BeaconService unexpected error: {e}")
+                logger.error(f"BeaconService unexpected error: {e}")
             
             # Wait for the next interval or until stopped
             self._stop_event.wait(self.interval_sec)

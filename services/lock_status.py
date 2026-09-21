@@ -90,7 +90,7 @@ class LockStatus:
         status = self.get_status(device_id)
 
         if status is None:
-            print("Kein Status erhalten.")
+            print("No status received.")
             return
 
         print("----------------------------")
@@ -109,7 +109,7 @@ class LockStatus:
         health = self.get_health(device_id)
 
         if health is None:
-            print("Keine Health-Daten.")
+            print("No health data received.")
             return
 
         print("----------------------------")

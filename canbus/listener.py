@@ -12,6 +12,8 @@ import time
 import queue
 from typing import Dict, Any, Optional
 from datetime import datetime
+import logging
+
 
 from database.database import SessionLocal
 from models.log import EventLog
@@ -21,6 +23,9 @@ from models.device import Device
 from .protocol import CANFrame
 from .service import CANService
 from .parser import CANParser, StatusBasic, HealthStatus, StatusError, CommandAck, IdRequest, UIDPart1, UIDPart2, StatusRFID, StatusRFIDPart2, EventWlAutoDelete, HealthVersionInfo, HealthDeviceInfo, HealthShort, HealthExtended, HealthDiagInfo, HealthSecurityStatus, WlInfoReport, LockModeReport, WlListV2Item, WlListV2UidPart1, WlListV2UidPart2, OccupancyStateReport, OccupancyOwnerShort, PolicyActionReport, RuntimeStateSnapshot, DiagExtended
+logger = logging.getLogger(__name__)
+
+
 
 ERROR_CODES = {
     0x00: "NONE",
@@ -202,7 +207,7 @@ class CANListener:
                         if len(self.recent_logs) > 200:
                             self.recent_logs = self.recent_logs[-100:]
                 except Exception as e:
-                    print(f"Log worker error: {e}")
+                    logger.error(f"Log worker error: {e}")
                     db.rollback()
 
     def add_log(self, device_id: int, event_type: str, card_uid: Optional[str] = None, details: Optional[str] = None):
@@ -257,7 +262,7 @@ class CANListener:
                     dev.active_slot = getattr(db_dev, "active_slot", 0) or 0
                     dev.last_seen = db_dev.last_seen
                     self.devices[db_dev.device_id] = dev
-        print(f"Preloaded {len(self.devices)} devices from database.")
+        logger.info(f"Preloaded {len(self.devices)} devices from database.")
 
     def get_device(self, device_id: int) -> DeviceState:
         with self.lock:
@@ -291,7 +296,7 @@ class CANListener:
                             db.add(new_dev)
                             db.commit()
                 except Exception as e:
-                    print(f"Failed to query/save device in DB: {e}")
+                    logger.error(f"Failed to query/save device in DB: {e}")
 
             return self.devices[device_id]
 
@@ -347,7 +352,7 @@ class CANListener:
                                         db_dev.active_slot = msg.active_slot
                                         db.commit()
                             except Exception as ex:
-                                print(f"Failed to persist active_slot from StatusBasic: {ex}")
+                                logger.error(f"Failed to persist active_slot from StatusBasic: {ex}")
                                 
                         dev.last_seen = time.time()
                 elif isinstance(msg, HealthStatus):
@@ -406,7 +411,7 @@ class CANListener:
                                             db_dev.active_slot = msg.active_slot
                                             db.commit()
                                 except Exception as ex:
-                                    print(f"Failed to persist active_slot from version info: {ex}")
+                                    logger.error(f"Failed to persist active_slot from version info: {ex}")
                         dev.last_seen = time.time()
                 elif isinstance(msg, HealthDeviceInfo):
                     dev = self.get_device(dev_id)
@@ -588,4 +593,4 @@ class CANListener:
 
 
         except Exception as e:
-            print(f"CANListener handle_frame error: {e}")
+            logger.error(f"CANListener handle_frame error: {e}")
