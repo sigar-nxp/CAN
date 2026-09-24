@@ -117,6 +117,8 @@ def get_device(id: int):
         "active_slot": active_slot,
         "target_slot": 1 if active_slot == 0 else 0,
         "target_binary": "slot_b.bin" if active_slot == 0 else "slot_a.bin",
+        "last_ack_command": getattr(dev, "last_ack_command", None),
+        "last_ack_time": getattr(dev, "last_ack_time", None),
     }
 
 @router.get("/devices/{id}/health")
@@ -168,18 +170,23 @@ def get_occupancy(id: int):
 def open_device(id: int):
     check_device_not_in_ota(id)
     lock_service.open(id)
+    can_listener.add_log(id, "MANUAL_OPEN", None, "Pulse open commanded")
     return {"status": "opened"}
 
 @router.post("/devices/{id}/open_hold")
+@router.post("/devices/{id}/hold")
 def open_hold_device(id: int):
     check_device_not_in_ota(id)
     lock_service.open_hold(id)
+    can_listener.add_log(id, "MANUAL_OPEN", None, "Hold open commanded")
     return {"status": "held open"}
 
 @router.post("/devices/{id}/reset")
+@router.post("/devices/{id}/release")
 def reset_device(id: int):
     check_device_not_in_ota(id)
     lock_service.open_reset(id)
+    can_listener.add_log(id, "MANUAL_OPEN", None, "Lock reset commanded")
     return {"status": "open state reset"}
 
 @router.post("/devices/{id}/led")
@@ -271,12 +278,13 @@ async def get_whitelist(id: int):
     if not dev:
         raise HTTPException(status_code=404, detail="Device not found")
         
-    dev.whitelist_items.clear()
     lock_service.request_wl_list_v2(id)
     
     # Polling wait loop for CAN bus response (up to ~1 second)
     for _ in range(10):
         await asyncio.sleep(0.1)
+        if dev.whitelist_items:
+            break
         
     # Serialize bytes into hex strings to avoid JSON serialization errors
     serialized_items = {}
@@ -313,6 +321,17 @@ def add_whitelist(id: int, req: WhitelistWriteReq):
     lock_service.send(frame2)
 
     time.sleep(0.2)
+
+    dev = can_listener.get_device(id)
+    if dev:
+        if req.slot_index not in dev.whitelist_items:
+            dev.whitelist_items[req.slot_index] = {"uid_parts": {}}
+        dev.whitelist_items[req.slot_index].update({
+            "uid_len": uid_len,
+            "ttl_days": req.ttl_days,
+            "uid_parts": {1: uid_bytes[:3], 2: uid_bytes[3:7]}
+        })
+    can_listener.add_log(id, "WHITELIST_MUTATION", req.uid_hex, f"Slot {req.slot_index} written, TTL {req.ttl_days}d")
         
     return Response(content=json.dumps({"status": "whitelist added"}) + "\n", media_type="application/json")
 
@@ -320,18 +339,32 @@ def add_whitelist(id: int, req: WhitelistWriteReq):
 def delete_whitelist_slot(id: int, slot_index: int):
     check_device_not_in_ota(id)
     lock_service.delete_wl_slot(id, slot_index)
+    dev = can_listener.get_device(id)
+    if dev and slot_index in dev.whitelist_items:
+        del dev.whitelist_items[slot_index]
+    can_listener.add_log(id, "WHITELIST_MUTATION", None, f"Slot {slot_index} deleted")
     return {"status": "whitelist slot deleted"}
 
 @router.delete("/devices/{id}/whitelist")
 def clear_whitelist(id: int):
     check_device_not_in_ota(id)
     lock_service.wl_clear(id)
+    dev = can_listener.get_device(id)
+    if dev:
+        dev.whitelist_items.clear()
+        dev.occupancy_state["occupied"] = False
+    can_listener.add_log(id, "WHITELIST_MUTATION", None, "Whitelist cleared")
     return {"status": "whitelist cleared"}
 
 @router.post("/devices/{id}/whitelist/{slot_index}/policy")
 def set_policy(id: int, slot_index: int, req: PolicyReq):
     check_device_not_in_ota(id)
     lock_service.set_wl_slot_policy(id, slot_index, req.policy, req.open_action, req.flags)
+    dev = can_listener.get_device(id)
+    if dev and slot_index in dev.whitelist_items:
+        dev.whitelist_items[slot_index]["policy"] = req.policy
+        dev.whitelist_items[slot_index]["open_action"] = req.open_action
+    can_listener.add_log(id, "WHITELIST_MUTATION", None, f"Slot {slot_index} policy set: policy={req.policy}, action={req.open_action}")
     return {"status": "policy set"}
 
 @router.post("/devices/{id}/auth_response")

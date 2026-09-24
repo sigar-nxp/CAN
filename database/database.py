@@ -6,10 +6,11 @@ engine for a local SQLite file, and creates the SessionLocal factory
 and the declarative Base class for ORM models.
 """
 
+import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-DATABASE_URL = "sqlite:///./pslocks.db"
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./pslocks.db")
 
 engine = create_engine(
     DATABASE_URL,

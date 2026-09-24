@@ -497,7 +497,51 @@ Reverts the lock to unprovisioned state (`0x7F`), resetting Device ID and flash 
 
 ### 5.8 Activity & Audit Logging
 
-The platform logs critical physical and network events to an internal SQLite database (`pslocks.db`) using an asynchronous worker queue to prevent CAN bus blocking.
+The platform logs critical physical, authentication, configuration, and firmware events to an internal SQLite database (`pslocks.db`) using an asynchronous worker queue. This guarantees that database writes and disk I/O never block time-critical CAN bus transmissions or firmware flashing loops.
+
+#### Audit Log Event Lifecycle & Schema
+
+Every access decision, actuation pulse, whitelist change, and OTA firmware stage is tracked with structured metadata:
+
+| Event Type | Category | Description | Details Payload / Context |
+| --- | --- | --- | --- |
+| `OTA_START` | Firmware | Asynchronous OTA flashing sequence initiated | JSON: `current_slot`, `target_slot`, `version`, `binary_name` |
+| `OTA_SUCCESS` | Firmware | Firmware flashed, CRC32 verified, and bank activated | JSON: `active_slot`, `crc32`, `binary_name`, `execution_time`, `duration_s` |
+| `OTA_FAILED` | Firmware | Flashing interrupted by handshake, streaming, or CRC error | JSON: `stage`, `error`, `binary_name`, `execution_time` |
+| `WHITELIST_MUTATION` | Access Policy | Whitelist credential write, deletion, clear, or policy update | String: e.g., `Slot 2 written, TTL 15d`, `Slot 2 deleted`, `Whitelist cleared` |
+| `MANUAL_OPEN` | Actuation | Remote pulse open, hold open, or reset release commanded | String: e.g., `Pulse open commanded`, `Hold open commanded`, `Lock reset commanded` |
+| `RFID_SCAN` | Access | Unregistered or registered RFID card detected at reader | Captured `card_uid` hex string |
+| `ACCESS_GRANTED` | Access | Local whitelist match (Usecase 2) or cloud-approved entry | `card_uid` hex string and authorization reason |
+| `ACCESS_DENIED` | Access | Whitelist miss or cloud-rejected entry | `card_uid` hex string and denial reason |
+| `LOCK_STATUS` | Telemetry | Physical bolt or door contact sensor transition | Transition string (e.g., `State changed to LOCKED`) |
+
+#### Non-Blocking Logging Architecture
+
+```
+[CAN Bus Listener / OTA Service]
+               │
+               ▼ (non-blocking call: can_listener.add_log() / _safe_record_audit_log())
+      [In-Memory Log Queue]
+               │
+               ▼ (Asynchronous Background Log Worker)
+      [SQLite pslocks.db] ──► [Server-Sent Events: /api/v1/stream (log_entry)]
+```
+
+Logging failures (such as disk full or locked database) are safely caught and logged without raising exceptions to callers (`_safe_record_audit_log`), ensuring CAN bus transactions and physical lock actuation proceed uninterrupted.
+
+#### Visual Representation in the Web Dashboard (Web UI)
+
+The Web Dashboard features a real-time **Activity & Audit Log** table populated automatically via Server-Sent Events (`/api/v1/stream`):
+- **Live Event Badges**: Visual color-coded tags allow instant identification of event types:
+  - `OTA_START`: Bold purple badge with border (`bg-purple-100 text-purple-800 border-purple-300 font-bold`).
+  - `OTA_SUCCESS`: Bold blue badge with border (`bg-blue-100 text-blue-800 border-blue-300 font-bold`).
+  - `OTA_FAILED`: Bold red badge with border (`bg-red-100 text-red-800 border-red-300 font-bold`).
+  - `MANUAL_OPEN`: Purple badge (`bg-purple-100 text-purple-800`).
+  - `ACCESS_GRANTED`: Green badge (`bg-green-100 text-green-800`).
+  - `ACCESS_DENIED` / `ERROR` / `ALARM`: Red badge (`bg-red-100 text-red-800`).
+  - `RFID_SCAN`: Blue badge (`bg-blue-100 text-blue-800`).
+  - `WHITELIST_MUTATION`: Clean neutral badge (`bg-gray-100 text-gray-800`).
+- **Structured JSON Parsing**: Complex metadata (e.g., OTA duration, target slot, CRC32) is automatically parsed client-side and rendered into pipe-separated key-value summaries (`key: val | key: val`), with the complete unescaped JSON string available via HTML hover tooltips (`title` attribute).
 
 #### `GET /api/v1/logs`
 
@@ -512,36 +556,34 @@ Retrieves a paginated list of recorded audit log events in reverse-chronological
 ```json
 [
   {
-    "id": 12,
-    "timestamp": "2026-09-02T20:37:47.617179Z",
+    "id": 14,
+    "timestamp": "2026-09-24T21:05:12.180200Z",
     "device_id": 1,
-    "device_name": "Locker 12",
-    "event_type": "LOCK_STATUS",
+    "device_name": "Locker 1",
+    "event_type": "OTA_SUCCESS",
     "card_uid": null,
-    "details": "State changed to LOCKED"
+    "details": "{\"active_slot\": 1, \"crc32\": \"0x63E4A0E1\", \"binary_name\": \"slot_b.bin\", \"execution_time\": \"1.42s\", \"duration_s\": 1.42}"
   },
   {
-    "id": 11,
-    "timestamp": "2026-09-02T20:35:10.120400Z",
+    "id": 13,
+    "timestamp": "2026-09-24T21:05:10.750100Z",
     "device_id": 1,
-    "device_name": "Locker 12",
-    "event_type": "RFID_SCAN",
-    "card_uid": "044426c2ff7180",
-    "details": null
+    "device_name": "Locker 1",
+    "event_type": "OTA_START",
+    "card_uid": null,
+    "details": "{\"current_slot\": 0, \"target_slot\": 1, \"version\": \"1.0.0\", \"binary_name\": \"slot_b.bin\"}"
+  },
+  {
+    "id": 12,
+    "timestamp": "2026-09-24T20:37:47.617179Z",
+    "device_id": 1,
+    "device_name": "Locker 1",
+    "event_type": "WHITELIST_MUTATION",
+    "card_uid": "04A1B2C3",
+    "details": "Slot 2 written, TTL 30d"
   }
 ]
 ```
-
-**Common Event Types:**
-
-* `RFID_SCAN`: Recorded when an authorized or unknown card is presented.
-
-
-* `LOCK_STATUS`: Bolt or door contact sensor transition.
-
-
-* `MANUAL_OPEN`: API-triggered pulse open, hold open, or reset.
-* `ACCESS_GRANTED` / `ACCESS_DENIED`: Local whitelist or cloud authentication decisions.
 
 
 ### 5.9 Real-Time Event Streaming (SSE)
@@ -605,6 +647,37 @@ The gateway dynamically resolves which slot binary to flash based on live teleme
 - Microcontroller firmware evaluates its Vector Table Offset Register `(SCB->VTOR >= 0x08020000) ? 1 : 0` to determine live execution bank with 100% hardware certainty.
 - Real-time broadcast: Emitted in every `STATUS_BASIC` frame (`0x200 | devId`, Byte 4: `active_slot`) and `HEALTH_P3` version frame (`0x300 | devId`, Byte 6: `active_slot`).
 - Bootloader Handshake Verification: On `CMD_OTA_START` handshake, the bootloader transmits `ACK_OTA_START` with Byte 2 containing its active slot. The gateway verifies and dynamically re-aligns the binary before streaming chunk 0, completely preventing bank inversion.
+
+#### 3. Dual-Bank Ping-Pong Lifecycle & Safety Interlock
+
+The STM32C092 dual-bank flash architecture provides seamless, zero-downtime over-the-air updates through an alternating ping-pong execution scheme:
+
+```
++─────────────────────────────────────────────────────────────────────────────+
+|                          Flash Memory Map (256 KB)                          |
++───────────────────────────────────┬─────────────────────────────────────────+
+| Bank A: 0x08004000 (112 KB)       | Bank B: 0x08020000 (112 KB)             |
+| [Slot A - Active Application]     | [Slot B - Target Inactive Bank]         |
++───────────────────────────────────┴─────────────────────────────────────────+
+                                    │
+                  1. Handshake: ACK_OTA_START reports active_slot=0
+                  2. Erase: Bootloader erases target Bank B (56 pages)
+                  3. Stream: 5-byte chunks paced @ ~6 ms delay
+                  4. Verify: Hardware IEEE 802.3 CRC32 calculation
+                  5. Activate: Atomic swap in Metadata Page 120 (0x0803C000)
+                  6. Reboot: MCU executes reset into Bank B (active_slot=1)
+                  7. Confirm: Gateway verifies online & emits BUZZ_OK chirp
+                                    │
+                                    ▼
++───────────────────────────────────┬─────────────────────────────────────────+
+| Bank A: 0x08004000 (112 KB)       | Bank B: 0x08020000 (112 KB)             |
+| [Slot A - Standby Fallback Bank]  | [Slot B - Active Updated Application]   |
++───────────────────────────────────┴─────────────────────────────────────────+
+```
+
+- **Zero-Brick Invariant**: Because firmware is written to the currently unexecuted bank, incomplete transfers or power losses during flashing leave the active bank completely intact.
+- **Safety Interlock (HTTP 503)**: Any incoming operational lock control requests (such as `POST /api/v1/devices/{id}/open`, `POST /devices/{id}/hold`, or `POST /devices/{id}/release`) are strictly blocked with `HTTP 503 Service Unavailable` while an OTA update is actively in progress. This prevents motor actuator movements or electrical voltage dips during flash writes.
+- **Audible Post-Flash Confirmation**: Following successful activation and MCU reset, the gateway verifies that the lock re-attaches to the CAN bus in the updated slot and triggers an audible confirmation chirp (`BUZZ_OK`).
 
 #### `POST /api/v1/ota/upload`
 
@@ -905,22 +978,225 @@ if __name__ == "__main__":
 
 ---
 
-## 8. Testing
+## 8. Testing Strategy, QA Framework & Diagnostics
 
-### Hardware-Independent Unit Tests
-The project includes a comprehensive, hardware-independent test suite covering CAN opcodes, parser logic, and REST API endpoints (using mock interfaces). To run the suite locally:
-```bash
-pytest tests/ -v
+The PS Locks Open Integration Platform implements a tiered validation strategy spanning hardware-independent unit regression, fully automated end-to-end integration, bench-level interactive hardware acceptance, and autonomous lock triage and recovery.
 
 ```
++─────────────────────────────────────────────────────────────────────────────+
+|                         Validation & Testing Pyramid                        |
++─────────────────────────────────────────────────────────────────────────────+
+|  [Lock Doctor]                Automated Triage & MCU Recovery (Stages 1-5)  |
+|  [Hardware Acceptance CLI]    Physical Bench Acceptance (NFC, Sensor, Audio)|
+|  [Automated E2E Suite]        Hybrid Live Actuation + Isolated OTA (Pytest) |
+|  [Unit & Regression Tests]    Opcodes, Protocol Parsers & Mock REST Endpoints|
++─────────────────────────────────────────────────────────────────────────────+
+```
 
-### Hardware & Integration Testing
+---
 
-An interactive test suite is included to verify CAN communication, RFID flows, door sensors, and actuator timings against connected hardware:
+### 8.1 Unit & Regression Tests
+
+The unit test suite validates protocol parsing, CAN frame builders, command serialization/deserialization, and API route handling using mock SocketCAN interfaces without requiring physical hardware:
+
+```bash
+# Execute standard hardware-independent test suite
+pytest tests/ -v
+```
+
+Tests run in milliseconds and verify:
+- CRC32 calculation and byte-level packing across all CAN opcodes.
+- Parser handling of basic telemetry (`0x200`), version info, and error codes (`0x300`).
+- FastAPI route contracts, schema validations, and mock responses.
+
+---
+
+### 8.2 Automated End-to-End (E2E) Test Suite (`tests/e2e/test_system_automated.py`)
+
+The automated E2E test suite executes comprehensive system-level validation covering lock actuation, telemetry synchronization, Whitelist V2 lifecycles, OTA dual-bank flashing, and audit logging.
+
+#### Hybrid Testing Architecture
+
+To enable safe, non-destructive execution in continuous integration (CI) as well as on live test benches:
+1. **Real Actuation & Live Telemetry (Lock 1)**: Actuator pulses, open hold, release reset, and LED/buzzer overrides are exercised against physical Lock 1 (or the live gateway daemon state), verifying genuine CAN bus acknowledgments (`LED_SET`, `BUZZ_PLAY`).
+2. **Safe Isolated Simulation (Device ID 99)**: The OTA safety interlock and complete dual-bank ping-pong flash cycle run on a dedicated virtual test node (`dev_id = 99`). This guarantees that bench hardware is never accidentally flash-erased, corrupted, or trapped in bootloader loops during test runs.
+
+#### The `CAN_SIMULATION` Safety Guard
+
+Running automated tests on the same host machine as the live Gateway daemon can lead to SocketCAN binding conflicts or duplicate frame consumption. The E2E suite isolates its test process socket by enforcing:
+
+```python
+os.environ["CAN_SIMULATION"] = "1"
+```
+
+This safety guard routes test-process CAN frames through the internal mock bus while allowing the HTTP client (`SystemE2EClient`) to communicate directly with the live Gateway daemon (`http://127.0.0.1:8000`) or fall back gracefully to FastAPI's in-process `TestClient`.
+
+#### Execution Commands
+
+```bash
+# Run the automated E2E test suite locally
+pytest tests/e2e/test_system_automated.py -v
+
+# Run against a live Gateway instance running on a specific IP/port
+OIP_API_URL=http://127.0.0.1:8000 pytest tests/e2e/test_system_automated.py -v
+```
+
+#### Test Coverage Matrix (6 Test Phases)
+
+| Phase | Test Name | Description |
+| --- | --- | --- |
+| **1. System & Device Inventory** | `test_system_health` | Verifies `GET /api/v1/health` status, timestamps, and uptime. |
+| | `test_device_inventory_and_telemetry` | Validates `GET /api/v1/devices/1` attributes (`is_locked`, `is_door_closed`, `active_slot`, `status_text`). |
+| **2. Actuator & Command Lifecycle** | `test_actuator_remote_open` | Triggers pulse unlock (`POST /devices/1/open`) and verifies state update. |
+| | `test_actuator_open_hold_and_release` | Tests permanent hold open (`/hold`) followed by reset release (`/release`). |
+| | `test_led_and_buzzer_remote_overrides` | Emits LED and buzzer overrides; asserts CAN command ACKs (`LED_SET`, `BUZZ_PLAY`). |
+| **3. Whitelist V2 & Policy** | `test_whitelist_v2_slot_lifecycle` | Writes Slot 2, configures execution policy, reads back, deletes slot, clears all slots, and verifies occupancy reset. Preserves initial state upon teardown. |
+| **4. OTA Dual-Bank Lifecycle** | `test_ota_safety_interlock` | Asserts that operational lock commands return `HTTP 503 Service Unavailable` while OTA is actively in progress. |
+| | `test_ota_ping_pong_flash_cycle` | Executes complete flash cycle with bootloader responder; asserts state `COMPLETE`, 100% progress, and active slot toggle. |
+| **5. Audit Log Persistence** | `test_audit_log_persistence` | Asserts database persistence and API retrieval of `MANUAL_OPEN`, `WHITELIST_MUTATION`, `OTA_START`, and `OTA_SUCCESS` with validated metadata. |
+| **6. Teardown & Recovery** | `safe_lock_recovery` (fixture) | Guarantees that upon test completion (pass or fail), the physical lock is left unlocked with all alarms and LEDs cleared. |
+
+---
+
+### 8.3 Interactive Hardware Acceptance CLI (`tools/hardware_acceptance_cli.py`)
+
+The **Hardware Acceptance CLI** is an interactive bench testing and verification tool designed for manufacturing, assembly validation, and bench QA technicians.
+
+#### Purpose & Capabilities
+- Validates physical RFID antenna coupling and cloud-gated provisioning.
+- Measures reed switch door sensor open/close transition latency (< 500 ms).
+- Exercises acoustic sound generators and optical LEDs with structured operator confirmation prompts.
+- Provides a headless simulation mode (`--simulate`) enabling automated non-interactive runs in CI/CD pipelines.
+
+#### Usage & Command-Line Options
+
+```bash
+# Interactive bench testing of Lock 1 (prompts operator at each step)
+python3 tools/hardware_acceptance_cli.py --device-id 1
+
+# Non-interactive headless simulation mode (for CI/CD validation)
+python3 tools/hardware_acceptance_cli.py --simulate
+
+# Run a specific verification section
+python3 tools/hardware_acceptance_cli.py --device-id 1 --section nfc
+python3 tools/hardware_acceptance_cli.py --device-id 1 --section sensor
+python3 tools/hardware_acceptance_cli.py --device-id 1 --section audio_visual
+```
+
+**CLI Arguments:**
+- `--url`: Base URL of the PS Locks Gateway API (default: `http://127.0.0.1:8000`).
+- `--device-id`: Target lock device ID (default: `1`).
+- `--section`: Test section to execute (`all`, `nfc`, `sensor`, `audio_visual`).
+- `--simulate`: Non-interactive mode that auto-confirms operator prompts and simulates card taps/sensor transitions.
+- `--timeout`: Per-step timeout in seconds (default: `30.0`).
+
+#### The 3 Verification Phases
+
+##### Phase 1: NFC / RFID Hardware Check
+1. **Unregistered RFID Card & Cloud-Gated Close (Step 1.1)**:
+   - Operator presents an unregistered card to the lock antenna.
+   - CLI reads the scan, transmits a simulated cloud authorization (`result: 1, action: 1`), writes the card to Slot 1 (ephemeral guest credential), and moves the bolt to locked.
+2. **Local Whitelist Opening Verification (Step 1.2)**:
+   - Operator presents the **same card** again.
+   - Lock validates the card against its local whitelist (Usecase 2) and unlocks bolt with ultra-low latency (**< 150 ms**) without requiring cloud/gateway round-trip latency.
+3. **Unauthorized Card Presentation & Denial Signal (Step 1.3)**:
+   - Operator presents an unlisted/unauthorized card.
+   - CLI transmits a cloud rejection decision (`result: 0, action: 0`), verifying the lock emits a solid red LED and a low-pitched reject tone.
+
+##### Phase 2: Sensor & Door Contact Check
+1. **Door Sensor Open Contact Transition (Step 2.1)**:
+   - Operator pulls the magnet / separates the reed switch door contact.
+   - CLI monitors gateway telemetry and verifies that the `is_door_closed: false` transition is detected within the **< 500 ms** specification limit.
+2. **Door Close Guard Security System Check (Step 2.2)**:
+   - CLI configures Lock Mode 2 with active Door Close Guard (`behavior_flags: 1`, warning delay: 2s).
+   - Once the door remains open past the 2-second timeout, the lock triggers the pulsing **ALARM1 siren** acoustic pattern.
+   - Operator closes the door contact, and the CLI verifies that the alarm clears and normal closed state is restored.
+
+##### Phase 3: Visual & Acoustic Verification
+The CLI triggers four distinct acoustic feedback profiles paired with optical LED overrides, requiring operator confirmation of pitch, tone progression, and cadence:
+
+| Sound Profile | Sound Code | Acoustic Pattern Description | Visual LED Mode | Verification Criteria |
+| --- | --- | --- | --- | --- |
+| **OK Tone** | `1` (`BUZZ_OK`) | Ascending two-tone chirp (low pitch $\rightarrow$ high pitch) | Solid Green (`LED_GREEN`) | Positive acceptance chirp with solid green light. |
+| **NOT_OK Tone**| `2` (`BUZZ_NOT_OK`) | Two short, low-pitched beeps (low $\rightarrow$ low reject tone) | Solid Red (`LED_RED`) | Rejection tone with solid red light. |
+| **ERROR Tone** | `3` (`BUZZ_ERROR`) | Five rapid, staccato warning beeps (`beep-beep-beep-beep-beep`) | Red Blink (`LED_RED_BLINK`) | High-urgency warning burst with flashing red light. |
+| **ALARM1 Siren**| `4` (`BUZZ_ALARM1`)| Loud, continuous pulsing alarm siren pattern | Fast Green Blink (`LED_GREEN_FAST`)| Intrusion / Door Close Guard alarm siren pattern. |
+
+##### Safety Teardown
+Upon test completion or early exit, the CLI automatically transmits unlock pulses and resets all buzzer and LED states, guaranteeing that the bench lock is left in an unlocked, safe operational state.
+
+---
+
+### 8.4 Lock Doctor & Diagnostics Utility (`tools/lock_doctor.py`)
+
+The **PS Locks Lock Doctor** is an autonomous, single-command triage and recovery utility engineered to diagnose, recover, and re-commission unresponsive, degraded, or stuck locks without requiring manual JTAG/SWD cabling or bench disassembly.
+
+```
++─────────────────────────────────────────────────────────────────────────────+
+|                         Lock Doctor 5-Stage Recovery                        |
++─────────────────────────────────────────────────────────────────────────────+
+| Stage 1: CAN Interface Repair   Probes link; resets BUS-OFF / down states   |
+| Stage 2: Node Ping & Telemetry  Probes application mode (0x02 / 0xFE)       |
+| Stage 3: Bootloader Recovery    Probes 0x781; slot activate or full re-flash|
+| Stage 4: Database Sync          Creates missing DB record; syncs last_seen  |
+| Stage 5: Gateway Verification   Validates online=true in REST API & Web UI  |
++─────────────────────────────────────────────────────────────────────────────+
+```
+
+#### Execution
+
+```bash
+# Execute automated triage and recovery on Lock 1
+python3 tools/lock_doctor.py --device-id 1
+
+# Force complete dual-bank firmware re-flash even if node is responsive
+python3 tools/lock_doctor.py --device-id 1 --force-reflash
+
+# Advanced configuration options
+python3 tools/lock_doctor.py \
+  --device-id 1 \
+  --interface can0 \
+  --bitrate 50000 \
+  --db-path /home/admin/PSLOCKS_OIP/pslocks.db \
+  --api-url http://127.0.0.1:8000
+```
+
+#### The 5 Recovery Stages Explained
+
+##### Stage 1: CAN Interface Health & Bus-Off Recovery
+- Inspects the Linux SocketCAN interface state via `ip -details link show can0`.
+- Automatically detects if the controller is in `DOWN`, `STOPPED`, `ERROR-PASSIVE`, or `BUS-OFF` state.
+- If degraded, cleanly brings down the interface, configures hardware bitrate (`50000`), sets automatic bus-off recovery (`restart-ms 100`), configures transmit queue length (`txqueuelen 1000`), and brings the link up into healthy `ERROR-ACTIVE` mode.
+
+##### Stage 2: Node Ping & Telemetry Probe
+- Transmits an application status request (`REQUEST_STATUS` `0x02` to CAN ID `0x100 | devId`) and awaits response on `0x200 | devId` or `0x300 | devId` with a 1.0-second timeout.
+- If silent, transmits device information request (`REQUEST_DEVICE_INFO` `0xFE`).
+- If the node responds, it is confirmed in normal application mode and advances to Stage 4. If completely silent, Lock Doctor initiates Stage 3 bootloader recovery.
+
+##### Stage 3: Bootloader Auto-Activation & Firmware Re-Flash
+- **Bootloader Detection**: Probes the node's dedicated OTA CAN ID (`0x780 | devId`, e.g., `0x781`) by transmitting `CMD_OTA_ACTIVATE` (`0x04`).
+- **Slot Activation Reboot**: If the bootloader acknowledges with `ACK_OTA_ACTIVATE` (`0x84`), the node was stuck in bootloader mode. Lock Doctor waits 1.0s for the MCU system reset and probes application ping.
+- **Autonomous Release Bundle Re-Flash**: If the node remains unresponsive or `--force-reflash` was requested, Lock Doctor resolves the latest firmware release bundle from `uploads/releases/latest_release.json`, determines the target bank (`slot_a.bin` or `slot_b.bin`), streams 5-byte chunks paced at ~6 ms delay, validates CRC32 via `CMD_OTA_VERIFY`, and reboots the lock.
+- **Hardware SWD OpenOCD Fallback**: If the CAN transceiver is completely unresponsive, Lock Doctor invokes OpenOCD over SWD (`interface/stlink.cfg`, `target/stm32c0x.cfg`) to inspect CPU registers (`PC`, `VTOR`) and execute a clean hardware `reset run`.
+
+##### Stage 4: SQLite Database Synchronization
+- Connects to `pslocks.db` to verify the lock node is cataloged in the `devices` table.
+- If missing, automatically registers the device with default parameters (`name: Schloss {id}`, `lock_mode: 1`, `auto_close_timeout: 3`, `active_slot: 1`).
+- If present, refreshes the `last_seen` timestamp to current epoch time.
+
+##### Stage 5: Final Gateway REST API Verification
+- Requests a health refresh via Gateway REST API (`POST /api/v1/devices/{id}/request_health`).
+- Queries `GET /api/v1/devices/{id}` to verify lock telemetry (`status_text`, `is_locked`, `active_slot`).
+- Queries `GET /api/v1/devices` inventory to confirm the device is flagged with `online: true`, verifying full restoration across both the CAN bus and the Web Dashboard.
+
+---
+
+### 8.5 Interactive Bench Integration Script
+
+For quick ad-hoc hardware bench validation without interactive prompts, the repository includes an interactive hardware exercise script:
 
 ```bash
 python3 tests/exhaustive_hardware_test.py
-
 ```
 
 ---

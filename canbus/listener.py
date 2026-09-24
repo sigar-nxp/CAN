@@ -472,6 +472,8 @@ class CANListener:
                             self.add_log(dev_id, "MANUAL_OPEN", None, "Hold open commanded")
                         elif msg.command == 0x05: # OPEN_RESET
                             self.add_log(dev_id, "MANUAL_OPEN", None, "Lock reset commanded")
+                        elif msg.command in (0x30, 0x31, 0x32, 0x33, 0x3D, 0x6A): # Whitelist commands
+                            self.add_log(dev_id, "WHITELIST_MUTATION", None, f"Whitelist command 0x{msg.command:02X} acknowledged")
                 elif isinstance(msg, StatusError):
                     dev = self.get_device(dev_id)
                     with self.lock:

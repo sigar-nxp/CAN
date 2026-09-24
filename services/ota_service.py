@@ -65,6 +65,14 @@ class OTAService:
 
     def reset_status(self, device_id: int) -> None:
         """Resets the OTA status for a target device to IDLE."""
+        if device_id in self.active_tasks:
+            task = self.active_tasks[device_id]
+            if not task.done():
+                task.cancel()
+            del self.active_tasks[device_id]
+        from config.globals import can_service
+        if can_service:
+            can_service.clear_ota_queue(device_id)
         self.statuses[device_id] = {
             "device_id": device_id,
             "progress": 0,
