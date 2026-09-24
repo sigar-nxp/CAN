@@ -167,7 +167,7 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 For 24/7 production operation on a Raspberry Pi or dedicated Linux host, systemd service units automate CAN interface configuration and ensure the FastAPI gateway automatically starts on system boot and restarts upon failure.
 
 The deployment configuration assets are located in the `deploy/` directory:
-- `deploy/can0.service`: A systemd oneshot service that brings up SocketCAN `can0` cleanly on boot at 50 kbit/s with `txqueuelen 1000` and `restart-ms 100`.
+- `deploy/can0.service`: A systemd oneshot service that brings up SocketCAN `can0` cleanly on boot at 50 kbit/s with `txqueuelen 1000`.
 - `deploy/pslocks-gateway.service`: A systemd service running the FastAPI application as the `admin` user with automatic restart policies and dependency on `can0.service`.
 - `deploy/install_services.sh`: An automated deployment script that validates root privileges, installs the units into `/etc/systemd/system/`, reloads systemd, enables autostart on boot, and starts both services immediately.
 
@@ -1225,7 +1225,7 @@ python3 tools/lock_doctor.py \
 ##### Stage 1: CAN Interface Health & Bus-Off Recovery
 - Inspects the Linux SocketCAN interface state via `ip -details link show can0`.
 - Automatically detects if the controller is in `DOWN`, `STOPPED`, `ERROR-PASSIVE`, or `BUS-OFF` state.
-- If degraded, cleanly brings down the interface, configures hardware bitrate (`50000`), sets automatic bus-off recovery (`restart-ms 100`), configures transmit queue length (`txqueuelen 1000`), and brings the link up into healthy `ERROR-ACTIVE` mode.
+- If degraded, cleanly brings down the interface, configures hardware bitrate (`50000`), configures transmit queue length (`txqueuelen 1000`), and brings the link up into healthy `ERROR-ACTIVE` mode.
 
 ##### Stage 2: Node Ping & Telemetry Probe
 - Transmits an application status request (`REQUEST_STATUS` `0x02` to CAN ID `0x100 | devId`) and awaits response on `0x200 | devId` or `0x300 | devId` with a 1.0-second timeout.

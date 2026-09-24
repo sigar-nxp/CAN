@@ -160,13 +160,8 @@ class LockDoctor:
 
             up_proc = run_sudo_command([
                 "ip", "link", "set", self.interface, "up", "type", "can",
-                "bitrate", str(self.bitrate), "restart-ms", "100"
+                "bitrate", str(self.bitrate)
             ])
-            if up_proc.returncode != 0:
-                up_proc = run_sudo_command([
-                    "ip", "link", "set", self.interface, "up", "type", "can",
-                    "bitrate", str(self.bitrate)
-                ])
 
             run_sudo_command(["ip", "link", "set", self.interface, "txqueuelen", "1000"])
             run_sudo_command(["ip", "link", "set", self.interface, "up"])
