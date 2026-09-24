@@ -162,6 +162,65 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 * **Web Dashboard (Commissioning & Testing)**: `http://<ip-or-hostname>:8000/`
 * **Interactive OpenAPI Documentation (REST Integration)**: `http://<ip-or-hostname>:8000/docs`
 
+### Production Deployment (Systemd Services)
+
+For 24/7 production operation on a Raspberry Pi or dedicated Linux host, systemd service units automate CAN interface configuration and ensure the FastAPI gateway automatically starts on system boot and restarts upon failure.
+
+The deployment configuration assets are located in the `deploy/` directory:
+- `deploy/can0.service`: A systemd oneshot service that brings up SocketCAN `can0` cleanly on boot at 50 kbit/s with `txqueuelen 1000` and `restart-ms 100`.
+- `deploy/pslocks-gateway.service`: A systemd service running the FastAPI application as the `admin` user with automatic restart policies and dependency on `can0.service`.
+- `deploy/install_services.sh`: An automated deployment script that validates root privileges, installs the units into `/etc/systemd/system/`, reloads systemd, enables autostart on boot, and starts both services immediately.
+
+#### 1. Automated Installation & Enabling
+
+Install and enable the systemd services using the deployment script:
+
+```bash
+sudo ./deploy/install_services.sh
+```
+
+The installer performs the following actions:
+1. Validates root/sudo execution.
+2. Copies `can0.service` and `pslocks-gateway.service` to `/etc/systemd/system/`.
+3. Runs `systemctl daemon-reload` to register the new units.
+4. Enables and starts both services via `systemctl enable --now can0.service pslocks-gateway.service`.
+5. Displays real-time status feedback using `systemctl is-active`.
+
+#### 2. Monitoring Service Logs
+
+Inspect and stream service logs in real time via `journalctl`:
+
+```bash
+# Follow FastAPI gateway logs in real time
+journalctl -u pslocks-gateway.service -f
+
+# View CAN interface initialization logs
+journalctl -u can0.service --no-pager
+```
+
+#### 3. Manual Service Management via systemctl
+
+You can manually inspect, start, stop, or restart the services at any time:
+
+```bash
+# Check service status
+systemctl status can0.service pslocks-gateway.service
+
+# Verify if services are actively running
+systemctl is-active can0.service pslocks-gateway.service
+
+# Restart the FastAPI gateway
+sudo systemctl restart pslocks-gateway.service
+
+# Stop the services
+sudo systemctl stop pslocks-gateway.service
+sudo systemctl stop can0.service
+
+# Start the services manually
+sudo systemctl start can0.service
+sudo systemctl start pslocks-gateway.service
+```
+
 ---
 
 ## 5. REST API Documentation
