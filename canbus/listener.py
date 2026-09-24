@@ -205,7 +205,10 @@ class CANListener:
     def _log_worker(self):
         with SessionLocal() as db:
             while self.running:
-                item = self.log_queue.get()
+                try:
+                    item = self.log_queue.get(timeout=0.2)
+                except queue.Empty:
+                    continue
                 if item is None:
                     break
                 try:
@@ -213,6 +216,14 @@ class CANListener:
                 except Exception as e:
                     logger.error(f"Log worker error: {e}")
                     db.rollback()
+            # Drain remaining items if any upon shutdown
+            while not self.log_queue.empty():
+                try:
+                    item = self.log_queue.get_nowait()
+                    if item is not None:
+                        self._persist_log_entry(db, item)
+                except Exception:
+                    break
 
     def add_log(self, device_id: int, event_type: str, card_uid: Optional[str] = None, details: Optional[str] = None):
         device_name = f"Lock {device_id}"
@@ -317,13 +328,21 @@ class CANListener:
             return {dev_id: dev.to_dict() for dev_id, dev in self.devices.items()}
 
     def stop(self):
+        was_running = self.running
         self.running = False
-        self.can.unregister_callback(self.handle_frame)
-        if hasattr(self, 'thread') and self.thread:
-            self.thread.join(timeout=2.0)
-        self.log_queue.put(None)
-        if self.log_thread:
-            self.log_thread.join(timeout=2.0)
+        if was_running:
+            try:
+                self.can.unregister_callback(self.handle_frame)
+            except Exception as e:
+                logger.error(f"Error unregistering CANListener callback: {e}")
+        if hasattr(self, 'thread') and self.thread and self.thread.is_alive():
+            self.thread.join(timeout=0.5)
+        try:
+            self.log_queue.put_nowait(None)
+        except Exception:
+            pass
+        if self.log_thread and self.log_thread.is_alive():
+            self.log_thread.join(timeout=0.5)
 
     def _loop(self):
         """Legacy placeholder; frame reception is driven by CANManager."""

@@ -80,6 +80,17 @@ class OTAService:
             "error": None,
         }
 
+    def cancel_all_tasks(self) -> None:
+        """Cancels all active single-device and batch OTA tasks cleanly."""
+        for device_id, task in list(self.active_tasks.items()):
+            if not task.done():
+                task.cancel()
+        self.active_tasks.clear()
+        if self.batch_task and not self.batch_task.done():
+            self.batch_task.cancel()
+        self.batch_task = None
+        self.batch_running = False
+
     def get_batch_status(self) -> Dict[str, Any]:
         """Returns the current state and progress of the batch OTA update sequence."""
         running = self.is_batch_running()

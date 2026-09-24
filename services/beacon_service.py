@@ -39,8 +39,8 @@ class BeaconService:
         """Stop the beacon background thread gracefully."""
         self.running = False
         self._stop_event.set()
-        if self._thread:
-            self._thread.join(timeout=2.0)
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=0.5)
 
     def _loop(self):
         """Internal loop to periodically broadcast the Master Beacon frame."""

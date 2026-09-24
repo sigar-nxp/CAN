@@ -18,6 +18,7 @@ from database.database import Base, engine
 from api.device import router as devices_router
 from api.system import router as system_router
 from config.globals import can_service, can_listener, beacon_service
+from services.ota_service import ota_service
 from api.stream import router as stream_router
 from routers.ota import router as ota_router
 
@@ -54,9 +55,30 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("Shutting down PS Locks OIP services...")
-    can_listener.stop()
-    beacon_service.stop()
-    can_service.stop()
+
+    # 1. Cancel OTA update background tasks
+    try:
+        ota_service.cancel_all_tasks()
+    except Exception as e:
+        logger.error(f"Error cancelling OTA tasks: {e}")
+
+    # 2. Stop synchronous background threads off the event loop so the loop is not blocked
+    def _stop_sync_services():
+        try:
+            can_listener.stop()
+        except Exception as ex:
+            logger.error(f"Error stopping CANListener: {ex}")
+        try:
+            beacon_service.stop()
+        except Exception as ex:
+            logger.error(f"Error stopping BeaconService: {ex}")
+        try:
+            can_service.stop()
+        except Exception as ex:
+            logger.error(f"Error stopping CANService: {ex}")
+
+    await asyncio.to_thread(_stop_sync_services)
+    logger.info("PS Locks OIP services shut down cleanly.")
 
 
 app = FastAPI(

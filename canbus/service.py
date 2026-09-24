@@ -122,7 +122,7 @@ class CANManager:
         """Stops the reader thread and closes the CAN interface."""
         self.running = False
         if self.reader_thread and self.reader_thread.is_alive():
-            self.reader_thread.join(timeout=2.0)
+            self.reader_thread.join(timeout=0.5)
         self.shutdown()
 
     def _reader_loop(self) -> None:
@@ -197,7 +197,7 @@ class CANManager:
 
     def _route_standard_frame(self, frame: CANFrame) -> None:
         """Distributes standard non-OTA frames to registered callbacks."""
-        for callback in self.standard_callbacks:
+        for callback in list(self.standard_callbacks):
             try:
                 callback(frame)
             except Exception as ex:
