@@ -137,10 +137,13 @@
                 <table class="w-full text-left text-sm whitespace-nowrap">
                     <thead>
                         <tr class="bg-gray-100 text-gray-600 uppercase text-xs tracking-wider border-b">
-                            <th class="px-5 py-3">Timestamp</th>
-                            <th class="px-5 py-3">Device</th>
-                            <th class="px-5 py-3">Event</th>
-                            <th class="px-5 py-3">Card UID</th>
+                            <th class="px-4 py-3">Timestamp</th>
+                            <th class="px-3 py-3">Dir</th>
+                            <th class="px-4 py-3">Device</th>
+                            <th class="px-3 py-3">CAN-ID</th>
+                            <th class="px-4 py-3">Event / Command</th>
+                            <th class="px-4 py-3">Payload</th>
+                            <th class="px-3 py-3">Card UID</th>
                             <th class="px-5 py-3">Details</th>
                         </tr>
                     </thead>
@@ -577,8 +580,12 @@
         let displayedLogs = [];
         
         function formatLogTime(isoStr) {
+            if (!isoStr) return '-';
             const d = new Date(isoStr);
-            return d.toLocaleString();
+            if (isNaN(d.getTime())) return isoStr;
+            const timeStr = d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const ms = String(d.getMilliseconds()).padStart(3, '0');
+            return `${timeStr}.${ms}`;
         }
         
         function getEventBadgeClass(eventType) {
@@ -591,6 +598,10 @@
             if (eventType.includes('DENIED') || eventType.includes('ERROR') || eventType.includes('ALARM')) return 'bg-red-100 text-red-800';
             if (eventType.includes('MANUAL')) return 'bg-purple-100 text-purple-800';
             if (eventType === 'RFID_SCAN') return 'bg-blue-100 text-blue-800';
+            if (eventType === 'COMMAND_ACK') return 'bg-teal-100 text-teal-800 border border-teal-300 font-medium';
+            if (eventType === 'BUZZ_PLAY' || eventType === 'BUZZ_STOP') return 'bg-amber-100 text-amber-800 border border-amber-300 font-medium';
+            if (eventType === 'LED_SET' || eventType === 'LED_RESET') return 'bg-indigo-100 text-indigo-800 border border-indigo-300 font-medium';
+            if (eventType === 'OPEN_LOCK' || eventType === 'OPEN_HOLD' || eventType === 'OPEN_RESET') return 'bg-blue-100 text-blue-800 border border-blue-300 font-medium';
             return 'bg-gray-100 text-gray-800';
         }
         
@@ -615,13 +626,23 @@
             const rawDetails = log.details || '';
             const displayDetails = formatLogDetails(rawDetails);
             const safeTitle = (rawDetails || '').replace(/"/g, '&quot;');
+            const isTX = (log.direction === 'TX');
+            const dirBadge = isTX 
+                ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold font-mono bg-cyan-100 text-cyan-800 border border-cyan-300">[TX &rarr;]</span>'
+                : '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold font-mono bg-emerald-100 text-emerald-800 border border-emerald-300">[RX &larr;]</span>';
+            const canId = log.can_id || '-';
+            const payload = log.payload || '-';
+            const fullTimeTitle = log.timestamp ? new Date(log.timestamp).toLocaleString() : '';
 
             tr.innerHTML = `
-                <td class="px-5 py-3 text-gray-500 font-mono text-xs">${formatLogTime(log.timestamp)}</td>
-                <td class="px-5 py-3 font-medium text-gray-800">${log.device_name || `Lock ${log.device_id}`}</td>
-                <td class="px-5 py-3"><span class="px-2.5 py-1 rounded-full text-xs font-semibold ${getEventBadgeClass(log.event_type)}">${log.event_type}</span></td>
-                <td class="px-5 py-3 font-mono text-gray-600">${log.card_uid || '-'}</td>
-                <td class="px-5 py-3 text-gray-600 max-w-xs truncate" title="${safeTitle}">${displayDetails}</td>
+                <td class="px-4 py-2.5 text-gray-500 font-mono text-xs" title="${fullTimeTitle}">${formatLogTime(log.timestamp)}</td>
+                <td class="px-3 py-2.5">${dirBadge}</td>
+                <td class="px-4 py-2.5 font-medium text-gray-800 text-xs">${log.device_name || `Lock ${log.device_id}`}</td>
+                <td class="px-3 py-2.5 font-mono text-xs font-semibold text-gray-700">${canId}</td>
+                <td class="px-4 py-2.5"><span class="px-2.5 py-0.5 rounded-full text-xs font-semibold ${getEventBadgeClass(log.event_type)}">${log.event_type}</span></td>
+                <td class="px-4 py-2.5 font-mono text-xs text-gray-600 tracking-wider">${payload}</td>
+                <td class="px-3 py-2.5 font-mono text-xs text-gray-600">${log.card_uid || '-'}</td>
+                <td class="px-5 py-2.5 text-gray-600 text-xs max-w-xs truncate" title="${safeTitle}">${displayDetails}</td>
             `;
             return tr;
         }

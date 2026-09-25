@@ -84,7 +84,14 @@ async def event_stream(request: Request):
             elif current_logs:
                 for log in current_logs:
                     if log["id"] > last_log_idx:
-                        yield f"event: log_entry\ndata: {json.dumps(log)}\n\n"
+                        log_data = dict(log)
+                        if "direction" not in log_data or not log_data["direction"]:
+                            log_data["direction"] = "RX"
+                        if "corrId" not in log_data and "corr_id" in log_data:
+                            log_data["corrId"] = log_data["corr_id"]
+                        if "command" not in log_data:
+                            log_data["command"] = log_data.get("event_type")
+                        yield f"event: log_entry\ndata: {json.dumps(log_data)}\n\n"
                         last_log_idx = log["id"]
 
             await asyncio.sleep(0.2)

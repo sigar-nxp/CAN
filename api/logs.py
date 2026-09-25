@@ -28,7 +28,12 @@ def get_logs(limit: int = Query(50, le=1000), device_id: Optional[int] = None, d
             "device_name": log.device_name,
             "event_type": log.event_type,
             "card_uid": log.card_uid,
-            "details": log.details
+            "details": log.details,
+            "direction": getattr(log, "direction", "RX") or "RX",
+            "can_id": getattr(log, "can_id", None),
+            "payload": getattr(log, "payload", None),
+            "corr_id": getattr(log, "corr_id", None),
+            "corrId": getattr(log, "corr_id", None),
         }
         for log in logs
     ]

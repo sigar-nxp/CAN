@@ -12,3 +12,8 @@ class EventLog(Base):
     event_type = Column(String)
     card_uid = Column(String, nullable=True)
     details = Column(String, nullable=True)
+    direction = Column(String, default="RX", nullable=True)
+    can_id = Column(String, nullable=True)
+    payload = Column(String, nullable=True)
+    corr_id = Column(Integer, nullable=True)
+

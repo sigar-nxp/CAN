@@ -170,7 +170,7 @@ def get_occupancy(id: int):
 def open_device(id: int):
     check_device_not_in_ota(id)
     lock_service.open(id)
-    can_listener.add_log(id, "MANUAL_OPEN", None, "Pulse open commanded")
+    can_listener.add_log(id, "MANUAL_OPEN", None, "Pulse open commanded", direction="TX")
     return {"status": "opened"}
 
 @router.post("/devices/{id}/open_hold")
@@ -178,7 +178,7 @@ def open_device(id: int):
 def open_hold_device(id: int):
     check_device_not_in_ota(id)
     lock_service.open_hold(id)
-    can_listener.add_log(id, "MANUAL_OPEN", None, "Hold open commanded")
+    can_listener.add_log(id, "MANUAL_OPEN", None, "Hold open commanded", direction="TX")
     return {"status": "held open"}
 
 @router.post("/devices/{id}/reset")
@@ -186,7 +186,7 @@ def open_hold_device(id: int):
 def reset_device(id: int):
     check_device_not_in_ota(id)
     lock_service.open_reset(id)
-    can_listener.add_log(id, "MANUAL_OPEN", None, "Lock reset commanded")
+    can_listener.add_log(id, "MANUAL_OPEN", None, "Lock reset commanded", direction="TX")
     return {"status": "open state reset"}
 
 @router.post("/devices/{id}/led")

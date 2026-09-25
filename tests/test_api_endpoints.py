@@ -8,6 +8,11 @@ from fastapi.testclient import TestClient
 from app import app
 from config.globals import can_listener, beacon_service
 
+orig_listener_start = can_listener.start
+orig_listener_stop = can_listener.stop
+orig_beacon_start = beacon_service.start
+orig_beacon_stop = beacon_service.stop
+
 can_listener.start = MagicMock()
 beacon_service.start = MagicMock()
 can_listener.stop = MagicMock()
@@ -17,6 +22,13 @@ class TestAPIEndpoints(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.client = TestClient(app)
+
+    @classmethod
+    def tearDownClass(cls):
+        can_listener.start = orig_listener_start
+        can_listener.stop = orig_listener_stop
+        beacon_service.start = orig_beacon_start
+        beacon_service.stop = orig_beacon_stop
 
     def test_root_endpoint(self):
         response = self.client.get("/")

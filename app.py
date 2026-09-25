@@ -29,8 +29,9 @@ from api.logs import router as logs_router
 
 logger = logging.getLogger(__name__)
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+# Create database tables and ensure schema
+from database.database import ensure_db_schema
+ensure_db_schema()
 
 
 @asynccontextmanager

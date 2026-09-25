@@ -22,6 +22,7 @@ from models.device import Device
 
 from .protocol import CANFrame
 from .service import CANService
+from .constants import COMMAND_NAMES
 from .parser import CANParser, StatusBasic, HealthStatus, StatusError, CommandAck, IdRequest, UIDPart1, UIDPart2, StatusRFID, StatusRFIDPart2, EventWlAutoDelete, HealthVersionInfo, HealthDeviceInfo, HealthShort, HealthExtended, HealthDiagInfo, HealthSecurityStatus, WlInfoReport, LockModeReport, WlListV2Item, WlListV2UidPart1, WlListV2UidPart2, OccupancyStateReport, OccupancyOwnerShort, PolicyActionReport, RuntimeStateSnapshot, DiagExtended
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,9 @@ class CANListener:
         self.recent_logs = []
         self.log_thread = None
 
+        if hasattr(self.can, "set_log_handler"):
+            self.can.set_log_handler(self.add_log)
+
     def _persist_log_entry(self, db, item: Dict[str, Any]):
         log_entry = EventLog(**item)
         db.add(log_entry)
@@ -194,7 +198,12 @@ class CANListener:
             "device_name": log_entry.device_name,
             "event_type": log_entry.event_type,
             "card_uid": log_entry.card_uid,
-            "details": log_entry.details
+            "details": log_entry.details,
+            "direction": getattr(log_entry, "direction", "RX") or item.get("direction", "RX"),
+            "can_id": getattr(log_entry, "can_id", None) or item.get("can_id"),
+            "payload": getattr(log_entry, "payload", None) or item.get("payload"),
+            "corr_id": getattr(log_entry, "corr_id", None) or item.get("corr_id"),
+            "corrId": getattr(log_entry, "corr_id", None) or item.get("corr_id"),
         }
         with self.lock:
             self.recent_logs.append(log_dict)
@@ -225,7 +234,17 @@ class CANListener:
                 except Exception:
                     break
 
-    def add_log(self, device_id: int, event_type: str, card_uid: Optional[str] = None, details: Optional[str] = None):
+    def add_log(
+        self,
+        device_id: int,
+        event_type: str,
+        card_uid: Optional[str] = None,
+        details: Optional[str] = None,
+        direction: str = "RX",
+        can_id: Optional[str] = None,
+        payload: Optional[str] = None,
+        corr_id: Optional[int] = None,
+    ):
         device_name = f"Lock {device_id}"
         if device_id in self.devices:
             device_name = self.devices[device_id].name
@@ -234,7 +253,11 @@ class CANListener:
             "device_name": device_name,
             "event_type": event_type,
             "card_uid": card_uid,
-            "details": details
+            "details": details,
+            "direction": direction,
+            "can_id": can_id,
+            "payload": payload,
+            "corr_id": corr_id,
         }
         if self.running and self.log_thread and self.log_thread.is_alive():
             self.log_queue.put(item)
@@ -265,6 +288,7 @@ class CANListener:
             return
         self.preload_devices_from_db()
         self.running = True
+        self.log_queue = queue.Queue()
         self.can.register_callback(self.handle_frame)
         self.log_thread = threading.Thread(target=self._log_worker, daemon=True)
         self.log_thread.start()
@@ -353,6 +377,8 @@ class CANListener:
         if not self.running or frame is None:
             return
         try:
+            can_id_str = f"0x{frame.arbitration_id:03X}"
+            payload_hex = " ".join(f"{b:02X}" for b in frame.data)
             msg = self.parser.parse(frame)
             if msg is not None:
                 dev_id = frame.device_id
@@ -367,12 +393,12 @@ class CANListener:
                         dev.update_error(msg.lock_error)
                         
                         if prev_state is not None and prev_state != msg.lock_state:
-                            self.add_log(dev_id, "LOCK_STATUS", None, f"State changed to {dev.status_text}")
+                            self.add_log(dev_id, "LOCK_STATUS", None, f"State changed to {dev.status_text}", direction="RX", can_id=can_id_str, payload=payload_hex)
                         if prev_error is not None and prev_error != msg.lock_error:
                             if msg.lock_error != 0:
-                                self.add_log(dev_id, "ERROR", None, f"Error changed to {dev.error_text}")
+                                self.add_log(dev_id, "ERROR", None, f"Error changed to {dev.error_text}", direction="RX", can_id=can_id_str, payload=payload_hex)
                             else:
-                                self.add_log(dev_id, "LOCK_STATUS", None, "Error cleared")
+                                self.add_log(dev_id, "LOCK_STATUS", None, "Error cleared", direction="RX", can_id=can_id_str, payload=payload_hex)
 
                         if msg.active_slot is not None and msg.active_slot in (0, 1):
                             dev.active_slot = msg.active_slot
@@ -457,7 +483,7 @@ class CANListener:
                             uid_hex = msg.uid[:msg.uid_len].hex()
                             dev.last_scanned_card = uid_hex
                             dev._partial_rfid = None
-                            self.add_log(dev_id, "RFID_SCAN", uid_hex, "Card scanned (4-byte)")
+                            self.add_log(dev_id, "RFID_SCAN", uid_hex, "Card scanned (4-byte)", direction="RX", can_id=can_id_str, payload=payload_hex)
                         else:
                             dev._partial_rfid = msg
                         dev.last_seen = time.time()
@@ -471,7 +497,7 @@ class CANListener:
                                 uid_hex = full_uid_bytes[:expected_len].hex()
                                 dev.last_scanned_card = uid_hex
                                 dev._partial_rfid = None
-                                self.add_log(dev_id, "RFID_SCAN", uid_hex, "Card scanned (7-byte)")
+                                self.add_log(dev_id, "RFID_SCAN", uid_hex, "Card scanned (7-byte)", direction="RX", can_id=can_id_str, payload=payload_hex)
                         dev.last_seen = time.time()
                 elif isinstance(msg, EventWlAutoDelete):
                     dev = self.get_device(dev_id)
@@ -486,18 +512,29 @@ class CANListener:
                         dev.last_ack_command = msg.command
                         dev.last_ack_time = time.time()
                         if msg.command == 0x01: # OPEN_LOCK
-                            self.add_log(dev_id, "MANUAL_OPEN", None, "Pulse open commanded")
+                            self.add_log(dev_id, "MANUAL_OPEN", None, "Pulse open commanded", direction="RX", can_id=can_id_str, payload=payload_hex, corr_id=msg.corr_id)
                         elif msg.command == 0x04: # OPEN_HOLD
-                            self.add_log(dev_id, "MANUAL_OPEN", None, "Hold open commanded")
+                            self.add_log(dev_id, "MANUAL_OPEN", None, "Hold open commanded", direction="RX", can_id=can_id_str, payload=payload_hex, corr_id=msg.corr_id)
                         elif msg.command == 0x05: # OPEN_RESET
-                            self.add_log(dev_id, "MANUAL_OPEN", None, "Lock reset commanded")
+                            self.add_log(dev_id, "MANUAL_OPEN", None, "Lock reset commanded", direction="RX", can_id=can_id_str, payload=payload_hex, corr_id=msg.corr_id)
                         elif msg.command in (0x30, 0x31, 0x32, 0x33, 0x3D, 0x6A): # Whitelist commands
-                            self.add_log(dev_id, "WHITELIST_MUTATION", None, f"Whitelist command 0x{msg.command:02X} acknowledged")
+                            self.add_log(dev_id, "WHITELIST_MUTATION", None, f"Whitelist command 0x{msg.command:02X} acknowledged", direction="RX", can_id=can_id_str, payload=payload_hex, corr_id=msg.corr_id)
+                        elif msg.command in (0x40, 0x41): # LED_SET, LED_RESET
+                            cmd_name = COMMAND_NAMES.get(msg.command, f"0x{msg.command:02X}")
+                            self.add_log(dev_id, "COMMAND_ACK", None, f"LED command ({cmd_name}) acknowledged", direction="RX", can_id=can_id_str, payload=payload_hex, corr_id=msg.corr_id)
+                        elif msg.command in (0x50, 0x51): # BUZZ_PLAY, BUZZ_STOP
+                            cmd_name = COMMAND_NAMES.get(msg.command, f"0x{msg.command:02X}")
+                            self.add_log(dev_id, "COMMAND_ACK", None, f"Buzzer command ({cmd_name}) acknowledged", direction="RX", can_id=can_id_str, payload=payload_hex, corr_id=msg.corr_id)
+                        else:
+                            cmd_name = COMMAND_NAMES.get(msg.command, f"0x{msg.command:02X}")
+                            self.add_log(dev_id, "COMMAND_ACK", None, f"Command {cmd_name} acknowledged", direction="RX", can_id=can_id_str, payload=payload_hex, corr_id=msg.corr_id)
                 elif isinstance(msg, StatusError):
                     dev = self.get_device(dev_id)
                     with self.lock:
                         dev.update_error(msg.error_code)
                         dev.last_seen = time.time()
+                        err_name = ERROR_CODES.get(msg.error_code, f"ERROR_{msg.error_code}")
+                        self.add_log(dev_id, "ERROR", None, f"Command 0x{msg.cmd:02X} rejected: {err_name}", direction="RX", can_id=can_id_str, payload=payload_hex, corr_id=msg.corr_id)
                 elif isinstance(msg, IdRequest):
                     uid_hex = msg.uid32.hex()
                     with self.lock:
@@ -583,7 +620,7 @@ class CANListener:
                             result_str = "GRANTED"
                             event_type = "ACCESS_GRANTED"
                         
-                        self.add_log(dev_id, event_type, dev.last_scanned_card, f"Policy: {msg.policy}, Action: {action_str}, Result: {result_str}")
+                        self.add_log(dev_id, event_type, dev.last_scanned_card, f"Policy: {msg.policy}, Action: {action_str}, Result: {result_str}", direction="RX", can_id=can_id_str, payload=payload_hex)
                         dev.last_seen = time.time()
                 elif isinstance(msg, RuntimeStateSnapshot):
                     dev = self.get_device(dev_id)
@@ -605,12 +642,12 @@ class CANListener:
                         dev.update_error(msg.lock_error)
                         
                         if prev_state is not None and prev_state != msg.physical_state:
-                            self.add_log(dev_id, "LOCK_STATUS", None, f"State changed to {dev.status_text}")
+                            self.add_log(dev_id, "LOCK_STATUS", None, f"State changed to {dev.status_text}", direction="RX", can_id=can_id_str, payload=payload_hex)
                         if prev_error is not None and prev_error != msg.lock_error:
                             if msg.lock_error != 0:
-                                self.add_log(dev_id, "ERROR", None, f"Error changed to {dev.error_text}")
+                                self.add_log(dev_id, "ERROR", None, f"Error changed to {dev.error_text}", direction="RX", can_id=can_id_str, payload=payload_hex)
                             else:
-                                self.add_log(dev_id, "LOCK_STATUS", None, "Error cleared")
+                                self.add_log(dev_id, "LOCK_STATUS", None, "Error cleared", direction="RX", can_id=can_id_str, payload=payload_hex)
                                 
                         dev.last_seen = time.time()
                 elif isinstance(msg, DiagExtended):
