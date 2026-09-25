@@ -1039,13 +1039,13 @@ if __name__ == "__main__":
 
 ## 8. Testing Strategy, QA Framework & Diagnostics
 
-The PS Locks Open Integration Platform implements a tiered validation strategy spanning hardware-independent unit regression, fully automated end-to-end integration, bench-level interactive hardware acceptance, and autonomous lock triage and recovery.
+The PS Locks Open Integration Platform implements a tiered validation strategy spanning hardware-independent unit regression, fully automated end-to-end integration, bench-level interactive hardware acceptance, and standard CAN bus diagnostics.
 
 ```
 +─────────────────────────────────────────────────────────────────────────────+
 |                         Validation & Testing Pyramid                        |
 +─────────────────────────────────────────────────────────────────────────────+
-|  [Lock Doctor]                Automated Triage & MCU Recovery (Stages 1-5)  |
+|  [CAN Diagnostics]            Bus Health & Standard SocketCAN Diagnostics   |
 |  [Hardware Acceptance CLI]    Physical Bench Acceptance (NFC, Sensor, Audio)|
 |  [Automated E2E Suite]        Hybrid Live Actuation + Isolated OTA (Pytest) |
 |  [Unit & Regression Tests]    Opcodes, Protocol Parsers & Mock REST Endpoints|
@@ -1186,67 +1186,63 @@ Upon test completion or early exit, the CLI automatically transmits unlock pulse
 
 ---
 
-### 8.4 Lock Doctor & Diagnostics Utility (`tools/lock_doctor.py`)
+### 8.4 Standard CAN Bus Diagnostics & Interface Health
 
-The **PS Locks Lock Doctor** is an autonomous, single-command triage and recovery utility engineered to diagnose, recover, and re-commission unresponsive, degraded, or stuck locks without requiring manual JTAG/SWD cabling or bench disassembly.
+Standard Linux SocketCAN utilities and Gateway health endpoints provide robust diagnostic and monitoring capabilities for field deployment and bus troubleshooting:
 
-```
-+─────────────────────────────────────────────────────────────────────────────+
-|                         Lock Doctor 5-Stage Recovery                        |
-+─────────────────────────────────────────────────────────────────────────────+
-| Stage 1: CAN Interface Repair   Probes link; resets BUS-OFF / down states   |
-| Stage 2: Node Ping & Telemetry  Probes application mode (0x02 / 0xFE)       |
-| Stage 3: Bootloader Recovery    Probes 0x781; slot activate or full re-flash|
-| Stage 4: Database Sync          Creates missing DB record; syncs last_seen  |
-| Stage 5: Gateway Verification   Validates online=true in REST API & Web UI  |
-+─────────────────────────────────────────────────────────────────────────────+
-```
+#### 1. SocketCAN Interface Health & Bus-Off Recovery
 
-#### Execution
+Inspect the Linux SocketCAN link state, error counters, and bitrate settings:
 
 ```bash
-# Execute automated triage and recovery on Lock 1
-python3 tools/lock_doctor.py --device-id 1
+# Check link state, queuing, and error statistics
+ip -details -statistics link show can0
 
-# Force complete dual-bank firmware re-flash even if node is responsive
-python3 tools/lock_doctor.py --device-id 1 --force-reflash
-
-# Advanced configuration options
-python3 tools/lock_doctor.py \
-  --device-id 1 \
-  --interface can0 \
-  --bitrate 50000 \
-  --db-path /home/admin/PSLOCKS_OIP/pslocks.db \
-  --api-url http://127.0.0.1:8000
+# If the interface is DOWN or in BUS-OFF state, reset and restore it:
+sudo ip link set can0 down
+sudo ip link set can0 txqueuelen 1000
+sudo ip link set can0 up type can bitrate 50000
 ```
 
-#### The 5 Recovery Stages Explained
+#### 2. Live Bus Traffic Monitoring
 
-##### Stage 1: CAN Interface Health & Bus-Off Recovery
-- Inspects the Linux SocketCAN interface state via `ip -details link show can0`.
-- Automatically detects if the controller is in `DOWN`, `STOPPED`, `ERROR-PASSIVE`, or `BUS-OFF` state.
-- If degraded, cleanly brings down the interface, configures hardware bitrate (`50000`), configures transmit queue length (`txqueuelen 1000`), and brings the link up into healthy `ERROR-ACTIVE` mode.
+Monitor live CAN bus traffic using standard `can-utils`:
 
-##### Stage 2: Node Ping & Telemetry Probe
-- Transmits an application status request (`REQUEST_STATUS` `0x02` to CAN ID `0x100 | devId`) and awaits response on `0x200 | devId` or `0x300 | devId` with a 1.0-second timeout.
-- If silent, transmits device information request (`REQUEST_DEVICE_INFO` `0xFE`).
-- If the node responds, it is confirmed in normal application mode and advances to Stage 4. If completely silent, Lock Doctor initiates Stage 3 bootloader recovery.
+```bash
+# Dump all CAN frames with relative timestamps
+candump -tz can0
 
-##### Stage 3: Bootloader Auto-Activation & Firmware Re-Flash
-- **Bootloader Detection**: Probes the node's dedicated OTA CAN ID (`0x780 | devId`, e.g., `0x781`) by transmitting `CMD_OTA_ACTIVATE` (`0x04`).
-- **Slot Activation Reboot**: If the bootloader acknowledges with `ACK_OTA_ACTIVATE` (`0x84`), the node was stuck in bootloader mode. Lock Doctor waits 1.0s for the MCU system reset and probes application ping.
-- **Autonomous Release Bundle Re-Flash**: If the node remains unresponsive or `--force-reflash` was requested, Lock Doctor resolves the latest firmware release bundle from `uploads/releases/latest_release.json`, determines the target bank (`slot_a.bin` or `slot_b.bin`), streams 5-byte chunks paced at ~6 ms delay, validates CRC32 via `CMD_OTA_VERIFY`, and reboots the lock.
-- **Hardware SWD OpenOCD Fallback**: If the CAN transceiver is completely unresponsive, Lock Doctor invokes OpenOCD over SWD (`interface/stlink.cfg`, `target/stm32c0x.cfg`) to inspect CPU registers (`PC`, `VTOR`) and execute a clean hardware `reset run`.
+# Filter traffic for a specific lock node (e.g., Device ID 1)
+# Application RX: 0x201, Async: 0x301, OTA: 0x781
+candump can0,101:7FF,201:7FF,301:7FF,781:7FF
+```
 
-##### Stage 4: SQLite Database Synchronization
-- Connects to `pslocks.db` to verify the lock node is cataloged in the `devices` table.
-- If missing, automatically registers the device with default parameters (`name: Schloss {id}`, `lock_mode: 1`, `auto_close_timeout: 3`, `active_slot: 1`).
-- If present, refreshes the `last_seen` timestamp to current epoch time.
+#### 3. Manual Node Polling via CAN
 
-##### Stage 5: Final Gateway REST API Verification
-- Requests a health refresh via Gateway REST API (`POST /api/v1/devices/{id}/request_health`).
-- Queries `GET /api/v1/devices/{id}` to verify lock telemetry (`status_text`, `is_locked`, `active_slot`).
-- Queries `GET /api/v1/devices` inventory to confirm the device is flagged with `online: true`, verifying full restoration across both the CAN bus and the Web Dashboard.
+Verify responsiveness of a target lock node by transmitting standard telemetry request frames:
+
+```bash
+# Send REQUEST_STATUS (0x02) to Lock 1 (CAN ID 0x101)
+cansend can0 101#02
+
+# Send REQUEST_DEVICE_INFO (0xFE) to Lock 1 (CAN ID 0x101)
+cansend can0 101#FE
+```
+
+#### 4. Gateway REST API Diagnostics & Telemetry Verification
+
+Verify lock communication and online status through the Gateway REST API:
+
+```bash
+# Request immediate health refresh from device
+curl -s -X POST http://127.0.0.1:8000/api/v1/devices/1/request_health
+
+# Query detailed lock telemetry and operational status
+curl -s http://127.0.0.1:8000/api/v1/devices/1 | jq .
+
+# Inspect overall system and CAN manager health
+curl -s http://127.0.0.1:8000/api/v1/health | jq .
+```
 
 ---
 

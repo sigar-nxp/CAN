@@ -21,3 +21,6 @@ logs/
 
 # OTA Uploads
 uploads/
+
+# Internal Tools
+tools/lock_doctor.py
