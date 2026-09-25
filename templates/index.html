@@ -15,6 +15,23 @@
         .animate-pulse-slow { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+        
+        /* Activity & Audit Log Viewer Expandable Cells & Copy Button */
+        .log-cell-preview {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            white-space: normal;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+        }
+        .log-cell-expanded {
+            display: block;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-wrap: anywhere;
+        }
     </style>
 </head>
 <body class="bg-gray-100 text-gray-800 font-sans min-h-screen pb-10">
@@ -605,17 +622,157 @@
             return 'bg-gray-100 text-gray-800';
         }
         
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
         function formatLogDetails(details) {
             if (!details) return '-';
-            if (typeof details === 'string' && (details.startsWith('{') || details.startsWith('['))) {
+            let str = details;
+            if (typeof details === 'object') {
                 try {
-                    const parsed = JSON.parse(details);
-                    return Object.entries(parsed).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`).join(' | ');
+                    str = JSON.stringify(details);
                 } catch (e) {
-                    return details;
+                    return String(details);
                 }
             }
-            return details;
+            if (typeof str === 'string' && (str.startsWith('{') || str.startsWith('['))) {
+                try {
+                    const parsed = JSON.parse(str);
+                    return Object.entries(parsed).map(([k, v]) => `${k.replace(/_/g, ' ')}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' | ');
+                } catch (e) {
+                    return str;
+                }
+            }
+            return String(str);
+        }
+
+        function toggleLogCell(btn) {
+            const wrapper = btn.closest('.log-cell-wrapper');
+            const content = wrapper ? wrapper.querySelector('.log-cell-text') : null;
+            if (!content) return;
+            const isExpanded = content.classList.contains('log-cell-expanded');
+            if (isExpanded) {
+                content.classList.remove('log-cell-expanded');
+                content.classList.add('log-cell-preview');
+                btn.textContent = 'Show more';
+            } else {
+                content.classList.remove('log-cell-preview');
+                content.classList.add('log-cell-expanded');
+                btn.textContent = 'Show less';
+            }
+        }
+
+        function copyLogText(btn, evt) {
+            if (evt) {
+                evt.stopPropagation();
+                evt.preventDefault();
+            }
+            const encoded = btn.getAttribute('data-copy');
+            if (!encoded) return;
+            try {
+                const text = decodeURIComponent(encoded);
+                copyToClipboard(text, btn);
+            } catch (e) {
+                console.error("Failed to decode copy text", e);
+            }
+        }
+
+        function copyToClipboard(text, btnElement) {
+            if (!text || text === '-') return;
+
+            function markSuccess() {
+                if (btnElement) {
+                    const originalHTML = btnElement.innerHTML;
+                    btnElement.innerHTML = `
+                        <svg class="w-3.5 h-3.5 text-green-600 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                    `;
+                    setTimeout(() => {
+                        btnElement.innerHTML = originalHTML;
+                    }, 1500);
+                }
+                showToast('Copied to clipboard', 'info');
+            }
+
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(markSuccess).catch(() => fallbackCopy(text));
+            } else {
+                fallbackCopy(text);
+            }
+
+            function fallbackCopy(str) {
+                try {
+                    const ta = document.createElement("textarea");
+                    ta.value = str;
+                    ta.style.position = "fixed";
+                    ta.style.left = "-9999px";
+                    ta.style.top = "-9999px";
+                    document.body.appendChild(ta);
+                    ta.focus();
+                    ta.select();
+                    const ok = document.execCommand('copy');
+                    document.body.removeChild(ta);
+                    if (ok) {
+                        markSuccess();
+                    } else {
+                        showToast('Failed to copy text', 'error');
+                    }
+                } catch (err) {
+                    showToast('Failed to copy text', 'error');
+                }
+            }
+        }
+
+        function renderExpandableCellContent(displayVal, rawVal, isMono = false, threshold = 70) {
+            if (!displayVal || displayVal === '-') {
+                return `<span class="text-gray-400 font-mono text-xs">-</span>`;
+            }
+            const displayText = String(displayVal);
+            const rawText = rawVal !== undefined && rawVal !== null ? String(rawVal) : displayText;
+            const isLong = displayText.length > threshold || displayText.includes('\n') || rawText.includes('\n');
+            const escapedDisplay = escapeHtml(displayText);
+            const safeTitle = escapeHtml(rawText);
+            const encodedCopy = encodeURIComponent(rawText);
+            const monoClass = isMono ? 'font-mono tracking-wider' : '';
+            const minWidthClass = isMono ? 'min-w-[120px]' : 'min-w-[160px]';
+            const maxWidthClass = isMono ? 'max-w-xs' : 'max-w-xs md:max-w-md lg:max-w-lg';
+
+            if (isLong) {
+                return `
+                    <div class="log-cell-wrapper flex items-start justify-between gap-1.5 ${minWidthClass} ${maxWidthClass}">
+                        <div class="flex-1 min-w-0">
+                            <div class="log-cell-text log-cell-preview text-xs text-gray-600 ${monoClass}" title="${safeTitle}">${escapedDisplay}</div>
+                            <button type="button" onclick="toggleLogCell(this)" class="log-toggle-btn inline-flex items-center text-[11px] font-medium text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 px-1.5 py-0.5 rounded cursor-pointer transition-colors focus:outline-none mt-1">Show more</button>
+                        </div>
+                        <button type="button" onclick="copyLogText(this, event)" data-copy="${encodedCopy}" title="Copy to clipboard" class="log-copy-btn opacity-60 hover:opacity-100 text-gray-400 hover:text-gray-700 hover:bg-gray-100 p-1 rounded transition-all shrink-0 cursor-pointer mt-0.5" aria-label="Copy to clipboard">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                            </svg>
+                        </button>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="log-cell-wrapper flex items-start justify-between gap-1.5 ${minWidthClass} ${maxWidthClass}">
+                    <div class="flex-1 min-w-0">
+                        <div class="log-cell-text whitespace-normal break-words text-xs text-gray-600 ${monoClass}" title="${safeTitle}">${escapedDisplay}</div>
+                    </div>
+                    <button type="button" onclick="copyLogText(this, event)" data-copy="${encodedCopy}" title="Copy to clipboard" class="log-copy-btn opacity-60 hover:opacity-100 text-gray-400 hover:text-gray-700 hover:bg-gray-100 p-1 rounded transition-all shrink-0 cursor-pointer mt-0.5" aria-label="Copy to clipboard">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                        </svg>
+                    </button>
+                </div>
+            `;
         }
 
         function renderLogTableRow(log) {
@@ -625,7 +782,6 @@
             
             const rawDetails = log.details || '';
             const displayDetails = formatLogDetails(rawDetails);
-            const safeTitle = (rawDetails || '').replace(/"/g, '&quot;');
             const isTX = (log.direction === 'TX');
             const dirBadge = isTX 
                 ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold font-mono bg-cyan-100 text-cyan-800 border border-cyan-300">[TX &rarr;]</span>'
@@ -635,14 +791,14 @@
             const fullTimeTitle = log.timestamp ? new Date(log.timestamp).toLocaleString() : '';
 
             tr.innerHTML = `
-                <td class="px-4 py-2.5 text-gray-500 font-mono text-xs" title="${fullTimeTitle}">${formatLogTime(log.timestamp)}</td>
-                <td class="px-3 py-2.5">${dirBadge}</td>
-                <td class="px-4 py-2.5 font-medium text-gray-800 text-xs">${log.device_name || `Lock ${log.device_id}`}</td>
-                <td class="px-3 py-2.5 font-mono text-xs font-semibold text-gray-700">${canId}</td>
-                <td class="px-4 py-2.5"><span class="px-2.5 py-0.5 rounded-full text-xs font-semibold ${getEventBadgeClass(log.event_type)}">${log.event_type}</span></td>
-                <td class="px-4 py-2.5 font-mono text-xs text-gray-600 tracking-wider">${payload}</td>
-                <td class="px-3 py-2.5 font-mono text-xs text-gray-600">${log.card_uid || '-'}</td>
-                <td class="px-5 py-2.5 text-gray-600 text-xs max-w-xs truncate" title="${safeTitle}">${displayDetails}</td>
+                <td class="px-4 py-2.5 text-gray-500 font-mono text-xs align-top" title="${fullTimeTitle}">${formatLogTime(log.timestamp)}</td>
+                <td class="px-3 py-2.5 align-top">${dirBadge}</td>
+                <td class="px-4 py-2.5 font-medium text-gray-800 text-xs align-top">${log.device_name || `Lock ${log.device_id}`}</td>
+                <td class="px-3 py-2.5 font-mono text-xs font-semibold text-gray-700 align-top">${canId}</td>
+                <td class="px-4 py-2.5 align-top"><span class="px-2.5 py-0.5 rounded-full text-xs font-semibold ${getEventBadgeClass(log.event_type)}">${log.event_type}</span></td>
+                <td class="px-4 py-2.5 align-top">${renderExpandableCellContent(payload, payload, true, 30)}</td>
+                <td class="px-3 py-2.5 font-mono text-xs text-gray-600 align-top">${log.card_uid || '-'}</td>
+                <td class="px-5 py-2.5 align-top">${renderExpandableCellContent(displayDetails, rawDetails || displayDetails, false, 70)}</td>
             `;
             return tr;
         }
