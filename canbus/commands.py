@@ -384,36 +384,46 @@ def request_device_info(
 # ---------------------------------------------------------
 
 def request_full_uid(
-    uid32: bytes,
+    uid32: Optional[bytes] = None,
+    device_id: int = DEFAULT_DEVICE_ID,
     corr_id: Optional[int] = None,
     lock_id: int = 0,
 ) -> CANFrame:
     """
-    Requests the full hardware unique ID for an unprovisioned node using its 32-bit broadcast UID.
+    Requests the full 96-bit hardware unique ID for a node.
+
+    Can be sent to an unprovisioned node (device_id=0x7F) with a specific 32-bit short UID
+    or with a wildcard (None -> 0x00000000), or directly to a configured node ID.
 
     Args:
-        uid32 (bytes): 4-byte truncated unique ID.
+        uid32 (Optional[bytes]): 4-byte truncated unique ID or None for wildcard (0x00000000).
+        device_id (int): Target node CAN ID (defaults to DEFAULT_DEVICE_ID = 0x7F).
         corr_id (Optional[int]): Correlation ID.
         lock_id (int): Logical lock index.
 
     Returns:
         CANFrame: The constructed CAN frame.
     """
-    if len(uid32) != 4:
-        raise ValueError("uid32 must be 4 bytes.")
+    if uid32 is None:
+        uid_bytes = b"\x00\x00\x00\x00"
+    else:
+        if len(uid32) != 4:
+            raise ValueError("uid32 must be 4 bytes.")
+        uid_bytes = uid32
 
     if corr_id is None:
         corr_id = _next_corr_id()
 
     return _frame(
-        CAN_COMMAND | DEFAULT_DEVICE_ID,
+        CAN_COMMAND | (device_id & 0x7F),
         [
             lock_id,
             REQUEST_FULL_UID,
             corr_id,
-            *uid32,
+            *uid_bytes,
         ],
     )
+
 
 
 def assign_id(

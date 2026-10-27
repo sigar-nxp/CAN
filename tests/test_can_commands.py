@@ -16,7 +16,9 @@ from canbus.commands import (
     set_lock_mode,
     request_lock_mode,
     request_occupancy_state,
-    auth_resp
+    auth_resp,
+    request_full_uid,
+    factory_reset,
 )
 from canbus.constants import *
 
@@ -113,3 +115,33 @@ class TestCANCommands(unittest.TestCase):
         frame = auth_resp(device_id=13, result=1, action=2, lock_id=0)
         self.assertEqual(frame.arbitration_id, CAN_COMMAND | 13)
         self.assertEqual(list(frame.data), [0, AUTH_RESP, 42, 1, 2])
+
+    @patch("canbus.commands._next_corr_id", return_value=42)
+    def test_request_full_uid_explicit(self, mock_corr_id):
+        uid = bytes([0x12, 0x34, 0x56, 0x78])
+        frame = request_full_uid(uid32=uid)
+        self.assertEqual(frame.arbitration_id, CAN_COMMAND | DEFAULT_DEVICE_ID)
+        self.assertEqual(list(frame.data), [0, REQUEST_FULL_UID, 42, 0x12, 0x34, 0x56, 0x78])
+
+    @patch("canbus.commands._next_corr_id", return_value=42)
+    def test_request_full_uid_wildcard(self, mock_corr_id):
+        frame = request_full_uid(uid32=None)
+        self.assertEqual(frame.arbitration_id, CAN_COMMAND | DEFAULT_DEVICE_ID)
+        self.assertEqual(list(frame.data), [0, REQUEST_FULL_UID, 42, 0, 0, 0, 0])
+
+    @patch("canbus.commands._next_corr_id", return_value=42)
+    def test_request_full_uid_node_addressed(self, mock_corr_id):
+        frame = request_full_uid(uid32=None, device_id=0x0B)
+        self.assertEqual(frame.arbitration_id, CAN_COMMAND | 0x0B)
+        self.assertEqual(list(frame.data), [0, REQUEST_FULL_UID, 42, 0, 0, 0, 0])
+
+    def test_request_full_uid_invalid_length(self):
+        with self.assertRaises(ValueError):
+            request_full_uid(uid32=b"\x01\x02\x03")
+
+    @patch("canbus.commands._next_corr_id", return_value=42)
+    def test_factory_reset(self, mock_corr_id):
+        frame = factory_reset(device_id=0x05)
+        self.assertEqual(frame.arbitration_id, CAN_COMMAND | 0x05)
+        self.assertEqual(list(frame.data), [0, FACTORY_RESET, 42])
+

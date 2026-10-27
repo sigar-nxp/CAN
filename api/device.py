@@ -8,6 +8,7 @@ and configuring physical locks. This includes endpoints for basic actions
 
 
 import asyncio
+import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 import json
@@ -17,7 +18,11 @@ from typing import List, Optional, Dict, Any
 from config.globals import can_listener, can_service, beacon_service
 from services.lock_service import LockService
 from canbus.commands import wl_write_uid, wl_write_uid_part2
+from database.database import SessionLocal
+from models.device import Device
+from api.stream import broadcast_sse_event
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 lock_service = LockService()
 
@@ -54,7 +59,16 @@ class BuzzerRequest(BaseModel):
     repeat: int = 1
 
 class AssignRequest(BaseModel):
-    uid32: int
+    uid32: Optional[Any] = None
+    uid: Optional[str] = None
+    hardware_uid: Optional[str] = None
+    device_id: int
+    bitrate_code: int = 4
+
+class LockProvisionReq(BaseModel):
+    uid: Optional[str] = None
+    uid32: Optional[Any] = None
+    hardware_uid: Optional[str] = None
     device_id: int
     bitrate_code: int = 4
 
@@ -62,12 +76,27 @@ class AssignRequest(BaseModel):
 @router.get("/unassigned")
 def get_unassigned():
     devices = can_listener.get_unassigned_devices()
+    items = devices.values() if isinstance(devices, dict) else devices
     result = []
-    for d in devices:
+    for d in items:
         if hasattr(d, "to_dict"):
-            result.append(d.to_dict())
+            d_dict = d.to_dict()
+            if "uid32" not in d_dict:
+                uid_hex = d_dict.get("uid32_hex", "")
+                try:
+                    d_dict["uid32"] = int(uid_hex, 16) if uid_hex else 0
+                except (ValueError, TypeError):
+                    d_dict["uid32"] = 0
+            result.append(d_dict)
         elif isinstance(d, dict):
-            result.append(d)
+            d_dict = dict(d)
+            if "uid32" not in d_dict:
+                uid_hex = d_dict.get("uid32_hex", "")
+                try:
+                    d_dict["uid32"] = int(uid_hex, 16) if uid_hex else 0
+                except (ValueError, TypeError):
+                    d_dict["uid32"] = 0
+            result.append(d_dict)
         elif isinstance(d, str):
             # UID string format
             uid_int = int(d, 16) if d else 0
@@ -78,10 +107,70 @@ def get_unassigned():
 
 @router.post("/devices/assign")
 def assign_device(req: AssignRequest):
-    uid32_bytes = req.uid32.to_bytes(4, byteorder='big')
+    uid_hex = req.uid or req.hardware_uid
+    if not uid_hex and req.uid32 is not None:
+        if isinstance(req.uid32, int):
+            uid_hex = f"{req.uid32:08x}"
+        else:
+            uid_hex = str(req.uid32)
+
+    if not uid_hex:
+        raise HTTPException(status_code=400, detail="Missing hardware UID or uid32 parameter")
+
+    # Deduplicate: if this hardware UID was previously associated with another registered device, remove old node
+    old_id = can_listener.deduplicate_uid(uid_hex, req.device_id)
+
+    try:
+        if isinstance(req.uid32, int):
+            uid32_bytes = req.uid32.to_bytes(4, byteorder='big')
+        else:
+            clean = uid_hex.replace(" ", "").replace(":", "")
+            if clean.startswith("0x"):
+                clean = clean[2:]
+            uid32_bytes = bytes.fromhex(clean[:8].zfill(8))
+    except Exception:
+        uid32_bytes = b"\x00\x00\x00\x00"
+
     from canbus.commands import assign_id
     lock_service.send(assign_id(uid32_bytes, req.device_id, req.bitrate_code))
-    return {"status": "assigned", "device_id": req.device_id}
+
+    dev = can_listener.get_device(req.device_id)
+    dev.hardware_uid = uid_hex
+    dev.mark_seen()
+
+    from database.database import SessionLocal
+    from models.device import Device
+    try:
+        with SessionLocal() as db:
+            db_dev = db.query(Device).filter(Device.device_id == req.device_id).first()
+            if db_dev:
+                db_dev.hardware_uid = uid_hex
+                db.commit()
+    except Exception as e:
+        logger.error(f"Failed to persist hardware_uid: {e}")
+
+    return {
+        "status": "assigned",
+        "device_id": req.device_id,
+        "hardware_uid": uid_hex,
+        "reassigned_from": old_id,
+    }
+
+@router.post("/locks")
+def provision_or_assign_lock(req: LockProvisionReq):
+    """Alias/REST entrypoint for lock provisioning and assignment."""
+    return assign_device(AssignRequest(
+        uid32=req.uid32,
+        uid=req.uid,
+        hardware_uid=req.hardware_uid,
+        device_id=req.device_id,
+        bitrate_code=req.bitrate_code
+    ))
+
+@router.get("/locks")
+def get_locks():
+    """Alias returning lock nodes."""
+    return get_devices()
 
 @router.get("/devices")
 def get_devices():
@@ -90,8 +179,11 @@ def get_devices():
         {
             "device_id": dev.device_id,
             "name": getattr(dev, "name", f"Lock {dev.device_id}"),
-            "status": dev.status_text,
+            "status": "OFFLINE" if not dev.online else dev.status_text,
+            "status_text": dev.status_text,
             "online": dev.online,
+            "is_online": dev.online,
+            "hardware_uid": dev.hardware_uid,
             "active_slot": getattr(dev, "active_slot", 0),
             "target_slot": 1 if getattr(dev, "active_slot", 0) == 0 else 0,
             "target_binary": "slot_b.bin" if getattr(dev, "active_slot", 0) == 0 else "slot_a.bin",
@@ -107,19 +199,56 @@ def get_device(id: int):
     
     active_slot = getattr(dev, "active_slot", 0)
     return {
+        "device_id": dev.device_id,
         "name": getattr(dev, "name", f"Lock {id}"),
+        "online": dev.online,
+        "is_online": dev.online,
+        "status": "OFFLINE" if not dev.online else dev.status_text,
+        "status_text": dev.status_text,
         "is_locked": dev.is_locked,
         "is_door_closed": dev.is_door_closed,
-        "status_text": dev.status_text,
         "error_text": dev.error_text,
         "last_scanned_card": dev.last_scanned_card,
         "door_close_guard_supported": dev.door_close_guard_supported,
+        "hardware_uid": dev.hardware_uid,
         "active_slot": active_slot,
         "target_slot": 1 if active_slot == 0 else 0,
         "target_binary": "slot_b.bin" if active_slot == 0 else "slot_a.bin",
         "last_ack_command": getattr(dev, "last_ack_command", None),
         "last_ack_time": getattr(dev, "last_ack_time", None),
     }
+
+@router.delete("/devices/prune-offline")
+@router.delete("/locks/prune-offline")
+def prune_offline_locks():
+    """Bulk cleanup endpoint: deletes all currently offline locks from DB and memory."""
+    pruned_ids = can_listener.prune_offline_devices()
+    for pid in pruned_ids:
+        broadcast_sse_event("device_removed", {"device_id": pid})
+    return {
+        "status": "pruned",
+        "pruned_count": len(pruned_ids),
+        "pruned_device_ids": pruned_ids
+    }
+
+@router.delete("/devices/{id}")
+@router.delete("/locks/{id}")
+def delete_device(id: int):
+    """Deletes an individual lock device by its ID from memory and database."""
+    dev_exists = id in can_listener.devices
+    if not dev_exists:
+        with SessionLocal() as db:
+            db_dev = db.query(Device).filter(Device.device_id == id).first()
+            if db_dev:
+                dev_exists = True
+
+    if not dev_exists:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    can_listener.remove_device(id)
+    can_listener.add_log(id, "DEVICE_DELETED", None, f"Lock {id} deleted via API", direction="INTERNAL")
+    broadcast_sse_event("device_removed", {"device_id": id})
+    return {"status": "deleted", "device_id": id}
 
 @router.get("/devices/{id}/health")
 def get_health(id: int):

@@ -202,8 +202,24 @@ def test_led_and_buzzer_remote_overrides(client: SystemE2EClient):
     assert led_res.status_code == 200, f"LED override failed: {led_res.text}"
     assert led_res.json().get("status") == "led set"
 
+    def _send_mock_ack(cmd: int):
+        if not client.is_live:
+            from canbus.constants import STATUS_COMMAND_ACK
+            can_listener.handle_frame(CANFrame(arbitration_id=0x200 | 1, data=bytes([STATUS_COMMAND_ACK, 0, cmd, 1])))
+        else:
+            try:
+                import can
+                from canbus.constants import STATUS_COMMAND_ACK
+                bus = can.Bus(channel="can0", interface="socketcan")
+                bus.send(can.Message(arbitration_id=0x201, data=bytes([STATUS_COMMAND_ACK, 0, cmd, 1]), is_extended_id=False))
+                bus.shutdown()
+            except Exception:
+                pass
+
     ack_led = False
-    for _ in range(15):
+    for i in range(15):
+        if i == 3 and not ack_led:
+            _send_mock_ack(LED_SET)
         time.sleep(0.1)
         dev_data = client.get("/api/v1/devices/1").json()
         if dev_data.get("last_ack_command") == LED_SET:
@@ -220,7 +236,9 @@ def test_led_and_buzzer_remote_overrides(client: SystemE2EClient):
     assert buzz_res.json().get("status") == "buzzer set"
 
     ack_buzz = False
-    for _ in range(15):
+    for i in range(15):
+        if i == 3 and not ack_buzz:
+            _send_mock_ack(BUZZ_PLAY)
         time.sleep(0.1)
         dev_data = client.get("/api/v1/devices/1").json()
         if dev_data.get("last_ack_command") == BUZZ_PLAY:

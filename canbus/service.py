@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional
 import can
 
 from .constants import (
+    FITNET_CAN_ID_OTA_BASE,
     FITNET_CAN_ID_OTA_ACK_BASE,
     FITNET_CAN_ID_OTA_BASE_MASK,
     FITNET_CAN_ID_OTA_CMD_BASE,
@@ -356,33 +357,27 @@ class CANManager:
     def _dispatch_frame(self, frame: CANFrame) -> None:
         """Dispatches frames using mask-based routing for OTA ACKs."""
         arb_id = frame.arbitration_id
-        is_ota_ack = ((arb_id & FITNET_CAN_ID_OTA_BASE_MASK) == 0x790) or (
-            0x790 <= arb_id <= (FITNET_CAN_ID_OTA_ACK_BASE + FITNET_CAN_ID_OTA_DEVICE_MASK)
-        )
-        if is_ota_ack:
-            self._route_ota_frame(frame)
+        is_ota_range = (arb_id & FITNET_CAN_ID_OTA_BASE_MASK) == FITNET_CAN_ID_OTA_BASE
+        if is_ota_range:
+            # Demultiplex: Only route OTA ACKs (0x81..0x84, bit 7 set) into the device OTA queue.
+            # OTA Commands (0x01..0x04, bit 7 clear) must NOT be routed into the ACK queue.
+            if frame.data and (frame.data[0] & 0x80) != 0:
+                self._route_ota_frame(frame)
+            else:
+                # Command frames are not routed into the ACK queue
+                pass
         else:
             self._route_standard_frame(frame)
 
     def _route_ota_frame(self, frame: CANFrame) -> None:
         """Routes an OTA ACK frame to the appropriate device queue."""
         arb_id = frame.arbitration_id
+        dev_id = arb_id & FITNET_CAN_ID_OTA_DEVICE_MASK
         target_queue: Optional[asyncio.Queue] = None
 
         with self.queue_lock:
-            for dev_id, queue in self.ota_queues.items():
-                if arb_id in (FITNET_CAN_ID_OTA_ACK_BASE | dev_id, FITNET_CAN_ID_OTA_ACK_BASE + dev_id):
-                    target_queue = queue
-                    break
-
-            if target_queue is None:
-                offset_id = arb_id - FITNET_CAN_ID_OTA_ACK_BASE
-                if offset_id in self.ota_queues:
-                    target_queue = self.ota_queues[offset_id]
-                else:
-                    masked_id = arb_id & FITNET_CAN_ID_OTA_DEVICE_MASK
-                    if masked_id in self.ota_queues:
-                        target_queue = self.ota_queues[masked_id]
+            if dev_id in self.ota_queues:
+                target_queue = self.ota_queues[dev_id]
 
         if target_queue is not None:
             if self.loop and self.loop.is_running():

@@ -44,5 +44,12 @@ def ensure_db_schema() -> None:
                     if col not in cols:
                         conn.execute(text(f"ALTER TABLE event_logs ADD COLUMN {col} {col_type} DEFAULT {default}"))
                 conn.commit()
+            
+            res_dev = conn.execute(text("PRAGMA table_info(devices)")).fetchall()
+            cols_dev = [r[1] for r in res_dev]
+            if cols_dev:
+                if "hardware_uid" not in cols_dev:
+                    conn.execute(text("ALTER TABLE devices ADD COLUMN hardware_uid VARCHAR NULL"))
+                conn.commit()
     except Exception:
         pass

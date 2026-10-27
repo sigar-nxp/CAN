@@ -225,8 +225,9 @@ class OTAService:
         queue: asyncio.Queue,
         expected_ack_cmd: int,
         timeout: float = 1.0,
+        validator: Optional[Callable[[CANFrame], bool]] = None,
     ) -> Optional[CANFrame]:
-        """Awaits an OTA acknowledgment frame matching the expected opcode."""
+        """Awaits an OTA acknowledgment frame matching the expected opcode and optional validator."""
         start_time = asyncio.get_event_loop().time()
         while True:
             remaining = timeout - (asyncio.get_event_loop().time() - start_time)
@@ -235,7 +236,8 @@ class OTAService:
             try:
                 frame: CANFrame = await asyncio.wait_for(queue.get(), timeout=remaining)
                 if frame.data and frame.data[0] == expected_ack_cmd:
-                    return frame
+                    if validator is None or validator(frame):
+                        return frame
             except asyncio.TimeoutError:
                 return None
 
@@ -348,7 +350,7 @@ class OTAService:
                 except asyncio.QueueEmpty:
                     break
 
-            # 1. ERASE Phase: Transmit CMD_OTA_START and wait for flash erase completion
+            # 1. ERASE Phase: Transmit single CMD_OTA_START and wait for flash erase completion
             stage = "ERASE"
             progress = 0
             self._update_status(device_id, 0, "ERASE", callback=progress_callback)
@@ -358,34 +360,33 @@ class OTAService:
             start_msg = CANFrame(arbitration_id=cmd_id, data=start_payload)
 
             connected = False
-            session_start = asyncio.get_event_loop().time()
-            while (asyncio.get_event_loop().time() - session_start) < 15.0:
-                try:
-                    can_service.send(start_msg)
-                except (can.CanError, OSError):
-                    pass
-                ack = await self._wait_for_ack(queue, ACK_OTA_START, timeout=3.0)
-                if ack and len(ack.data) > 1 and ack.data[1] == 0:
-                    connected = True
-                    if len(ack.data) >= 3 and ack.data[2] in (0, 1):
-                        bootloader_active_slot = ack.data[2]
-                        dev = can_listener.get_device(device_id)
-                        dev.active_slot = bootloader_active_slot
-                        expected_binary = "slot_b.bin" if bootloader_active_slot == 0 else "slot_a.bin"
-                        if not binary_path.endswith(expected_binary):
-                            new_binary = self.resolve_target_binary(device_id, "auto")
-                            if new_binary != binary_path and os.path.exists(new_binary):
-                                with open(new_binary, "rb") as f:
-                                    fw_data = bytearray(f.read())
-                                if len(fw_data) % 8 != 0:
-                                    fw_data.extend(b"\xFF" * (8 - (len(fw_data) % 8)))
-                                size = len(fw_data)
-                                crc32 = binascii.crc32(fw_data) & 0xFFFFFFFF
-                                binary_path = new_binary
-                    break
+            # Send single CMD_OTA_START frame (relying on RAM Mailbox to preserve parameters)
+            try:
+                can_service.send(start_msg)
+            except (can.CanError, OSError):
+                pass
+
+            ack = await self._wait_for_ack(queue, ACK_OTA_START, timeout=10.0)
+            if ack and len(ack.data) > 1 and ack.data[1] == 0:
+                connected = True
+                if len(ack.data) >= 3 and ack.data[2] in (0, 1):
+                    bootloader_active_slot = ack.data[2]
+                    dev = can_listener.get_device(device_id)
+                    dev.active_slot = bootloader_active_slot
+                    expected_binary = "slot_b.bin" if bootloader_active_slot == 0 else "slot_a.bin"
+                    if not binary_path.endswith(expected_binary):
+                        new_binary = self.resolve_target_binary(device_id, "auto")
+                        if new_binary != binary_path and os.path.exists(new_binary):
+                            with open(new_binary, "rb") as f:
+                                fw_data = bytearray(f.read())
+                            if len(fw_data) % 8 != 0:
+                                fw_data.extend(b"\xFF" * (8 - (len(fw_data) % 8)))
+                            size = len(fw_data)
+                            crc32 = binascii.crc32(fw_data) & 0xFFFFFFFF
+                            binary_path = new_binary
 
             if not connected:
-                raise TimeoutError("Bootloader connection/erase timeout (15s exceeded)")
+                raise TimeoutError("Bootloader connection/erase timeout (10s exceeded)")
 
             # 2. FLASH Phase: Stream chunks with physical layer pacing
             stage = "FLASH"
@@ -399,6 +400,15 @@ class OTAService:
                 payload = struct.pack("<B H", CMD_OTA_DATA, chunk_idx) + bytes(chunk_data)
                 chunk_frame = CANFrame(arbitration_id=cmd_id, data=payload)
 
+                target_chunk = chunk_idx + 1
+
+                def _validate_chunk_ack(f: CANFrame, exp: int = target_chunk) -> bool:
+                    # Stale or duplicate ACKs with exp_chunk <= chunk_idx are ignored
+                    if len(f.data) >= 3:
+                        exp_chunk = f.data[1] | (f.data[2] << 8)
+                        return exp_chunk == exp
+                    return False
+
                 chunk_ack = False
                 for attempt in range(8):
                     try:
@@ -407,12 +417,15 @@ class OTAService:
                         await asyncio.sleep(0.01 * (attempt + 1))
                         continue
 
-                    ack = await self._wait_for_ack(queue, ACK_OTA_DATA, timeout=0.15)
-                    if ack and len(ack.data) >= 3:
-                        exp_chunk = ack.data[1] | (ack.data[2] << 8)
-                        if exp_chunk == chunk_idx + 1:
-                            chunk_ack = True
-                            break
+                    ack = await self._wait_for_ack(
+                        queue,
+                        ACK_OTA_DATA,
+                        timeout=0.25,
+                        validator=_validate_chunk_ack,
+                    )
+                    if ack:
+                        chunk_ack = True
+                        break
                     await asyncio.sleep(self.pacing_delay * (1 + attempt * 0.5))
 
                 if not chunk_ack:

@@ -92,10 +92,12 @@ class HealthVersionInfo:
 
 @dataclass(slots=True)
 class HealthDeviceInfo:
-    """Hardware type, PCB revision, and capability flags (e.g. Door Close Guard)."""
+    """Hardware type, PCB revision, and capability flags (e.g. Door Close Guard, Watchdog, OTA)."""
     device_id: int
     hw_info_str: str
     door_close_guard_supported: bool = False
+    ota_supported: bool = False
+    watchdog_active: bool = False
 
 
 @dataclass(slots=True)
@@ -285,6 +287,11 @@ class CANParser:
         # --------------------------------------------------
 
         if msg_type == CAN_ID_REQUEST:
+            if len(data) >= 5 and data[0] == 0x28:
+                return IdRequest(
+                    device_id=dev_id,
+                    uid32=bytes(data[1:5]),
+                )
             if len(data) >= 4:
                 return IdRequest(
                     device_id=dev_id,
@@ -298,6 +305,13 @@ class CANParser:
                 return None
 
             sub = data[0]
+
+            if sub == 0x28 and len(data) >= 5:
+                # Opcode 0x28 unassigned/provisioning request in STATUS namespace
+                return IdRequest(
+                    device_id=dev_id,
+                    uid32=bytes(data[1:5]),
+                )
 
             if sub == STATUS_BASIC and len(data) >= 4:
                 active_slot = data[4] if len(data) >= 5 else None
@@ -425,13 +439,19 @@ class CANParser:
                 elif sub == HEALTH_DEVICE_INFO and len(data) >= 5:
                     hw_info_str = f"Type:{data[3]} Rev:{data[4]}"
                     door_close_guard_supported = False
+                    ota_supported = False
+                    watchdog_active = False
                     if len(data) >= 8:
                         cap_flags = (data[5] << 16) | (data[6] << 8) | data[7]
                         door_close_guard_supported = bool(cap_flags & (1 << 14))
+                        ota_supported = bool(cap_flags & (1 << 7))
+                        watchdog_active = bool(cap_flags & (1 << 6))
                     return HealthDeviceInfo(
                         device_id=dev_id, 
                         hw_info_str=hw_info_str,
-                        door_close_guard_supported=door_close_guard_supported
+                        door_close_guard_supported=door_close_guard_supported,
+                        ota_supported=ota_supported,
+                        watchdog_active=watchdog_active,
                     )
                 elif sub == HEALTH_DIAG_INFO and len(data) >= 6:
                     return HealthDiagInfo(

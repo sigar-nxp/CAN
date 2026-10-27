@@ -32,8 +32,8 @@ class TestCANManagerRouting(unittest.IsolatedAsyncioTestCase):
         queue = self.can_manager.get_ota_queue(dev_id)
 
         ack_id = FITNET_CAN_ID_OTA_ACK_BASE | dev_id
-        # Verify mask-based routing requirement: (arb_id & FITNET_CAN_ID_OTA_BASE_MASK) == 0x790
-        self.assertEqual(ack_id & FITNET_CAN_ID_OTA_BASE_MASK, 0x790)
+        # Verify mask-based routing requirement: (arb_id & FITNET_CAN_ID_OTA_BASE_MASK) == 0x780
+        self.assertEqual(ack_id & FITNET_CAN_ID_OTA_BASE_MASK, 0x780)
 
         ota_frame = CANFrame(arbitration_id=ack_id, data=bytes([0x81, 0x00]))
         self.can_manager._dispatch_frame(ota_frame)
@@ -43,12 +43,12 @@ class TestCANManagerRouting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(received_frame.data, bytes([0x81, 0x00]))
 
     async def test_ota_ack_routing_7bit_boundary(self):
-        """Verify 7-bit device IDs (up to 0x7F / 0x80F) are routed properly."""
+        """Verify 7-bit device IDs (up to 0x7F / 0x7FF) are routed properly within 11-bit CAN."""
         dev_id = 0x7F
         queue = self.can_manager.get_ota_queue(dev_id)
 
-        ack_id = FITNET_CAN_ID_OTA_ACK_BASE + dev_id  # 0x790 + 0x7F = 0x80F
-        self.assertEqual(ack_id, 0x80F)
+        ack_id = FITNET_CAN_ID_OTA_ACK_BASE | dev_id  # 0x780 | 0x7F = 0x7FF
+        self.assertEqual(ack_id, 0x7FF)
 
         ota_frame = CANFrame(arbitration_id=ack_id, data=bytes([0x82, 0x01, 0x00]))
         self.can_manager._dispatch_frame(ota_frame)

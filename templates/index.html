@@ -295,6 +295,10 @@
                     <span class="w-2 h-2 rounded-full bg-slate-700"></span>
                     <h2 class="text-xs font-mono font-bold text-slate-900 uppercase tracking-widest">Active Lock Nodes</h2>
                     <span id="active-nodes-badge" class="font-mono text-xs font-semibold px-2 py-0.5 rounded border border-slate-300 bg-white text-slate-700 shadow-2xs">0 Nodes Discovered</span>
+                    <button onclick="pruneOfflineDevices()" class="text-xs font-mono font-semibold px-2.5 py-0.5 rounded border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 hover:text-rose-700 shadow-2xs transition-colors cursor-pointer flex items-center gap-1.5" title="Cleanup and delete all currently offline locks">
+                        <span>🗑</span>
+                        <span>Prune Offline</span>
+                    </button>
                 </div>
                 <div class="text-xs font-mono text-slate-500 flex items-center space-x-3">
                     <span class="inline-flex items-center space-x-1"><span class="w-2 h-2 rounded-full bg-rose-600"></span><span>Bolted</span></span>
@@ -1199,7 +1203,7 @@
         }
 
         function updateDeviceSummaryCounters() {
-            const onlineDevs = devices.filter(d => d.online);
+            const onlineDevs = devices.filter(d => Boolean(d.is_online !== undefined ? d.is_online : d.online));
             const onlineEl = document.getElementById('stat-online-nodes');
             const boltedEl = document.getElementById('stat-bolted-nodes');
             const openEl = document.getElementById('stat-open-nodes');
@@ -1209,11 +1213,11 @@
             if (badgeEl) badgeEl.innerText = `${onlineDevs.length} Online (${devices.length} Registered)`;
 
             if (boltedEl) {
-                const bolted = onlineDevs.filter(d => d.details?.is_locked || d.status === 'LOCKED').length;
+                const bolted = onlineDevs.filter(d => d.details?.is_locked || d.is_locked || d.status === 'LOCKED').length;
                 boltedEl.innerText = bolted;
             }
             if (openEl) {
-                const open = onlineDevs.filter(d => !d.details?.is_door_closed).length;
+                const open = onlineDevs.filter(d => !(d.details?.is_door_closed ?? d.is_door_closed ?? true)).length;
                 openEl.innerText = open;
             }
         }
@@ -1225,9 +1229,8 @@
                     devices = devList;
                     updateDeviceFilterOptions();
                     devList.forEach(dev => {
-                        if (dev.online) {
-                            renderLockerCard(dev.device_id, dev, dev.health || {});
-                        }
+                        const isOnline = Boolean(dev.is_online !== undefined ? dev.is_online : dev.online);
+                        renderLockerCard(dev.device_id, dev, dev.health || {}, isOnline);
                     });
                     updateDeviceSummaryCounters();
                 }
@@ -1277,6 +1280,9 @@
             window.eventSource.addEventListener('device_update', function(e) {
                 try {
                     const data = JSON.parse(e.data);
+                    const isOnline = Boolean(data.is_online !== undefined ? data.is_online : data.online);
+                    data.online = isOnline;
+                    data.is_online = isOnline;
                     
                     const existingIdx = devices.findIndex(d => d.device_id === data.device_id);
                     if (existingIdx !== -1) {
@@ -1287,14 +1293,14 @@
                     }
                     updateDeviceSummaryCounters();
                     
-                    if (data.online) {
-                        renderLockerCard(data.device_id, data.details, data.health);
-                        
-                        if (previousScannedCard[data.device_id] !== data.details.last_scanned_card) {
-                            previousScannedCard[data.device_id] = data.details.last_scanned_card;
+                    renderLockerCard(data.device_id, data.details || data, data.health || {}, isOnline);
+                    
+                    if (isOnline) {
+                        if (previousScannedCard[data.device_id] !== data.details?.last_scanned_card) {
+                            previousScannedCard[data.device_id] = data.details?.last_scanned_card;
 
                             if (modalDeviceId === data.device_id && document.getElementById('modal-rfid-auto')?.checked) {
-                                if (data.details.last_scanned_card !== "None" && data.details.last_scanned_card !== null) {
+                                if (data.details?.last_scanned_card !== "None" && data.details?.last_scanned_card !== null) {
                                     showToast("Auto-Reply triggered for card scan", "info");
                                     modalTriggerRFID();
                                 }
@@ -1307,6 +1313,21 @@
                     }
                 } catch(err) {
                     console.error("Error processing device_update", err);
+                }
+            });
+
+            window.eventSource.addEventListener('device_removed', function(e) {
+                try {
+                    const data = JSON.parse(e.data);
+                    const removedId = data.device_id;
+                    if (modalDeviceId === removedId) closeModal();
+                    devices = devices.filter(d => d.device_id !== removedId);
+                    const card = document.querySelector(`[data-id="${removedId}"]`);
+                    if (card) card.remove();
+                    updateDeviceFilterOptions();
+                    updateDeviceSummaryCounters();
+                } catch(err) {
+                    console.error("Error processing device_removed", err);
                 }
             });
             
@@ -1414,7 +1435,7 @@
             }
         }
 
-        function renderLockerCard(id, details, health) {
+        function renderLockerCard(id, details, health, isOnline = true) {
             const grid = document.getElementById('locker-grid');
             let card = grid.querySelector(`[data-id="${id}"]`);
             const isLocked = details.is_locked;
@@ -1423,11 +1444,13 @@
             const vcc = health?.health_short?.vcc_mv ? (health.health_short.vcc_mv / 1000).toFixed(2) + ' V' : '--';
             const temp = health?.health_short?.temp_c !== undefined ? health.health_short.temp_c + ' °C' : '--';
             const isUpdating = otaUpdatingDevices.has(id);
-            const disAttr = isUpdating ? 'disabled' : '';
-            const disClass = isUpdating ? 'opacity-40 cursor-not-allowed pointer-events-none' : '';
+            const disAttr = (isUpdating || !isOnline) ? 'disabled' : '';
+            const disClass = (isUpdating || !isOnline) ? 'opacity-40 cursor-not-allowed pointer-events-none' : '';
 
             let statusBadge = '';
-            if (isLocked) {
+            if (!isOnline) {
+                statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-slate-100 text-slate-500 border-slate-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>OFFLINE</span>`;
+            } else if (isLocked) {
                 statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-rose-50 text-rose-800 border-rose-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>BOLTED</span>`;
             } else if (!isClosed) {
                 statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-amber-50 text-amber-800 border-amber-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-600 animate-pulse"></span>DOOR AJAR</span>`;
@@ -1435,7 +1458,7 @@
                 statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>UNLOCKED</span>`;
             }
 
-            const cardHeaderBorder = isLocked ? 'border-rose-200' : (!isClosed ? 'border-amber-200' : 'border-emerald-200');
+            const cardHeaderBorder = !isOnline ? 'border-slate-200' : (isLocked ? 'border-rose-200' : (!isClosed ? 'border-amber-200' : 'border-emerald-200'));
 
             const innerHTML = `
                 <div class="px-4 py-3 bg-white border-b ${cardHeaderBorder} flex justify-between items-center rounded-t-lg">
@@ -1443,8 +1466,11 @@
                         <span class="font-mono text-xs font-bold px-2 py-0.5 rounded border bg-slate-100 text-slate-800 border-slate-300 shrink-0">#${String(id).padStart(2, '0')}</span>
                         <h3 class="text-sm font-bold text-slate-900 truncate" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</h3>
                     </div>
-                    <div class="shrink-0 ml-2">
+                    <div class="shrink-0 ml-2 flex items-center gap-1.5">
                         ${statusBadge}
+                        <button onclick="deleteDeviceNode(${id})" title="Delete Lock #${id}" class="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-1 rounded transition-colors cursor-pointer" aria-label="Delete Lock #${id}">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                        </button>
                     </div>
                 </div>
 
@@ -1539,6 +1565,48 @@
                 } else if (!locked && banner) {
                     banner.remove();
                 }
+            }
+        }
+
+        async function deleteDeviceNode(id) {
+            if (!confirm(`Delete Lock #${id}?`)) return;
+            try {
+                await API.delete(`/api/v1/devices/${id}`);
+                if (modalDeviceId === id) closeModal();
+                devices = devices.filter(d => d.device_id !== id);
+                const card = document.querySelector(`[data-id="${id}"]`);
+                if (card) card.remove();
+                updateDeviceFilterOptions();
+                updateDeviceSummaryCounters();
+                showToast(`Lock #${id} deleted`, 'success');
+            } catch (e) {
+                showToast(e.message || `Failed to delete Lock #${id}`, 'error');
+            }
+        }
+
+        async function pruneOfflineDevices() {
+            const offlineCount = devices.filter(d => !Boolean(d.is_online !== undefined ? d.is_online : d.online)).length;
+            if (offlineCount === 0) {
+                showToast('No offline locks to prune', 'info');
+                return;
+            }
+            if (!confirm(`Remove all ${offlineCount} offline lock(s) from the system?`)) return;
+            try {
+                const res = await API.delete('/api/v1/devices/prune-offline');
+                const prunedIds = res.pruned_device_ids || [];
+                if (prunedIds.length > 0) {
+                    if (prunedIds.includes(modalDeviceId)) closeModal();
+                    devices = devices.filter(d => !prunedIds.includes(d.device_id));
+                    prunedIds.forEach(id => {
+                        const card = document.querySelector(`[data-id="${id}"]`);
+                        if (card) card.remove();
+                    });
+                    updateDeviceFilterOptions();
+                    updateDeviceSummaryCounters();
+                }
+                showToast(`Pruned ${prunedIds.length} offline lock(s)`, 'success');
+            } catch (e) {
+                showToast(e.message || 'Failed to prune offline locks', 'error');
             }
         }
 

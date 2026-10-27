@@ -25,6 +25,7 @@ from canbus.commands import (
 )
 
 from canbus.constants import (
+    DEFAULT_DEVICE_ID,
     LED_GREEN,
     LED_RED,
     BUZZ_OK,
@@ -107,10 +108,9 @@ class LockCommands:
     # Provisioning
     # ---------------------------------------------------------
 
-    def request_full_uid(self, uid32):
-
+    def request_full_uid(self, uid32=None, device_id=DEFAULT_DEVICE_ID):
         self.send(
-            request_full_uid(uid32)
+            request_full_uid(uid32=uid32, device_id=device_id)
         )
 
     def assign_id(

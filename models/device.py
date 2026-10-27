@@ -25,6 +25,7 @@ class Device(Base):
 
     device_id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False, default="Lock")
+    hardware_uid = Column(String, nullable=True, index=True)
     lock_mode = Column(Integer, default=1)
     auto_close_timeout = Column(Integer, default=3)
     behavior_flags = Column(Integer, default=0)

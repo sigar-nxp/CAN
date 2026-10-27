@@ -19,8 +19,9 @@ pslocks.db
 *.log
 logs/
 
-# OTA Uploads
+# OTA Uploads & Staging
 uploads/
+firmware/
 
 # Internal Tools
 tools/lock_doctor.py

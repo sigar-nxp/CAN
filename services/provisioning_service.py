@@ -44,6 +44,9 @@ class ProvisioningService:
         except ValueError:
             raise ValueError("Invalid uid32 format. Must be hex string.")
 
+        # Deduplicate UID: clean up any existing ghost node associated with this UID
+        can_listener.deduplicate_uid(uid32_hex, target_device_id)
+
         # Step 1: Send request_full_uid
         can_listener.clear_uid_parts()
         self.can.send(request_full_uid(uid32_bytes))
@@ -64,6 +67,10 @@ class ProvisioningService:
         if not full_uid:
             raise TimeoutError("Failed to receive full UID from device within timeout.")
 
+        full_uid_hex = full_uid.hex()
+        # Deduplicate with full UID as well
+        can_listener.deduplicate_uid(full_uid_hex, target_device_id)
+
         # Store full UID in unassigned device just in case
         with can_listener.lock:
             if uid32_hex in can_listener.unassigned_devices:
@@ -79,6 +86,9 @@ class ProvisioningService:
             dev = can_listener.get_device(target_device_id)
             if dev.last_seen > start:
                 verified = True
+                dev.hardware_uid = full_uid_hex
+                dev.full_uid = full_uid_hex
+                dev.mark_seen()
                 break
             time.sleep(0.1)
 
@@ -92,7 +102,7 @@ class ProvisioningService:
 
         return {
             "device_id": target_device_id,
-            "full_uid_hex": full_uid.hex(),
+            "full_uid_hex": full_uid_hex,
             "status": "provisioned"
         }
 

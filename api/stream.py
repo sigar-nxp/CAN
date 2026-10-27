@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Any, Dict, Tuple
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
@@ -7,18 +8,117 @@ from config.globals import can_listener, beacon_service
 
 router = APIRouter(tags=["Stream"])
 
+
+def extract_unassigned_devices(raw_unassigned: Any) -> Dict[str, Tuple[float, Dict[str, Any]]]:
+    """
+    Extracts and normalizes unassigned devices from various possible container types
+    (dict of dicts/objects/timestamps, list of objects/dicts/strings, set, etc.)
+    into a dictionary mapping uid32_hex -> (last_seen, dict_payload).
+    """
+    normalized: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+    if not raw_unassigned:
+        return normalized
+
+    if isinstance(raw_unassigned, dict):
+        items = list(raw_unassigned.items())
+    elif isinstance(raw_unassigned, (list, set, tuple)):
+        items = [(None, item) for item in raw_unassigned]
+    else:
+        try:
+            items = [(None, item) for item in iter(raw_unassigned)]
+        except TypeError:
+            items = []
+
+    for key, val in items:
+        # Determine uid32_hex, last_seen, and base dict representation
+        if hasattr(val, "to_dict"):
+            d_dict = val.to_dict()
+            uid_hex = getattr(val, "uid32_hex", None) or d_dict.get("uid32_hex") or (str(key) if key is not None else "")
+            last_seen = getattr(val, "last_seen", None) or d_dict.get("last_seen", 0.0)
+        elif isinstance(val, dict):
+            d_dict = dict(val)
+            uid_hex = d_dict.get("uid32_hex") or (str(key) if key is not None else "")
+            last_seen = d_dict.get("last_seen", 0.0)
+        elif isinstance(val, (int, float)) and key is not None:
+            uid_hex = f"{key:08X}" if isinstance(key, int) else str(key)
+            last_seen = float(val)
+            d_dict = {"uid32_hex": uid_hex, "last_seen": last_seen}
+        elif isinstance(val, str):
+            uid_hex = val
+            last_seen = 0.0
+            d_dict = {"uid32_hex": uid_hex, "last_seen": last_seen}
+        elif isinstance(val, int):
+            uid_hex = f"{val:08X}"
+            last_seen = 0.0
+            d_dict = {"uid32_hex": uid_hex, "last_seen": last_seen}
+        else:
+            uid_hex = str(key if key is not None else val)
+            last_seen = getattr(val, "last_seen", 0.0)
+            d_dict = {"uid32_hex": uid_hex, "last_seen": last_seen}
+
+        # Normalize uid32 integer representation for frontend compatibility
+        d_dict["uid32_hex"] = uid_hex
+        if "uid32" not in d_dict:
+            try:
+                d_dict["uid32"] = int(uid_hex, 16) if uid_hex else 0
+            except (ValueError, TypeError):
+                d_dict["uid32"] = 0
+        if "last_seen" not in d_dict:
+            d_dict["last_seen"] = last_seen
+
+        normalized[uid_hex] = (last_seen, d_dict)
+
+    return normalized
+
+
+stream_subscribers = set()
+
+
+def broadcast_sse_event(event: str, data: dict):
+    """Broadcast an SSE event directly to all active event_stream subscribers."""
+    msg = f"event: {event}\ndata: {json.dumps(data)}\n\n"
+    for q in list(stream_subscribers):
+        try:
+            q.put_nowait(msg)
+        except Exception:
+            pass
+
+
 async def event_stream(request: Request):
+    subscriber_queue = asyncio.Queue()
+    stream_subscribers.add(subscriber_queue)
     last_device_seen = {}
+    last_device_online = {}
     last_unassigned_seen = {}
     last_beacon_sent = -1
     last_log_idx = 0
 
     try:
         while can_listener.running and not await request.is_disconnected():
+            # Drain any direct broadcast events
+            while not subscriber_queue.empty():
+                try:
+                    yield subscriber_queue.get_nowait()
+                except Exception:
+                    break
+
             # Check devices
+            current_device_ids = set(can_listener.devices.keys())
+            # Detect removed devices
+            for dev_id in list(last_device_seen.keys()):
+                if dev_id not in current_device_ids:
+                    del last_device_seen[dev_id]
+                    last_device_online.pop(dev_id, None)
+                    yield f"event: device_removed\ndata: {json.dumps({'device_id': dev_id})}\n\n"
+
             for dev_id, dev in list(can_listener.devices.items()):
-                if dev_id not in last_device_seen or last_device_seen[dev_id] != dev.last_seen:
+                is_online = dev.online
+                if (dev_id not in last_device_seen 
+                    or last_device_seen[dev_id] != dev.last_seen 
+                    or last_device_online.get(dev_id) != is_online):
+                    
                     last_device_seen[dev_id] = dev.last_seen
+                    last_device_online[dev_id] = is_online
                     
                     details = {
                         "name": getattr(dev, "name", f"Lock {dev_id}"),
@@ -27,7 +127,9 @@ async def event_stream(request: Request):
                         "status_text": dev.status_text,
                         "error_text": dev.error_text,
                         "last_scanned_card": dev.last_scanned_card,
-                        "door_close_guard_supported": dev.door_close_guard_supported
+                        "door_close_guard_supported": dev.door_close_guard_supported,
+                        "hardware_uid": dev.hardware_uid,
+                        "full_uid": dev.full_uid,
                     }
                     health = {
                         "health_short": dev.health_short,
@@ -38,32 +140,22 @@ async def event_stream(request: Request):
                     }
                     data = {
                         "device_id": dev_id,
-                        "online": dev.online,
+                        "online": is_online,
+                        "is_online": is_online,
+                        "status": "OFFLINE" if not is_online else dev.status_text,
                         "details": details,
                         "health": health
                     }
                     yield f"event: device_update\ndata: {json.dumps(data)}\n\n"
 
             # Check unassigned
-            current_unassigned = can_listener.get_unassigned_devices()
-            unassigned_changed = False
-            if len(current_unassigned) != len(last_unassigned_seen):
-                unassigned_changed = True
-            else:
-                for d in current_unassigned:
-                    if d.uid32_hex not in last_unassigned_seen or last_unassigned_seen[d.uid32_hex] != d.last_seen:
-                        unassigned_changed = True
-                        break
-            
-            if unassigned_changed:
-                last_unassigned_seen = {d.uid32_hex: d.last_seen for d in current_unassigned}
-                result = []
-                for d in current_unassigned:
-                    if hasattr(d, "to_dict"):
-                        result.append(d.to_dict())
-                    else:
-                        uid_int = int(d, 16) if d else 0
-                        result.append({"uid32_hex": d, "uid32": uid_int})
+            raw_unassigned = can_listener.get_unassigned_devices()
+            normalized = extract_unassigned_devices(raw_unassigned)
+            current_seen = {uid: info[0] for uid, info in normalized.items()}
+
+            if current_seen != last_unassigned_seen:
+                last_unassigned_seen = current_seen
+                result = [info[1] for info in normalized.values()]
                 yield f"event: unassigned_update\ndata: {json.dumps(result)}\n\n"
 
             # Check beacon
@@ -97,6 +189,8 @@ async def event_stream(request: Request):
             await asyncio.sleep(0.2)
     except asyncio.CancelledError:
         pass
+    finally:
+        stream_subscribers.discard(subscriber_queue)
 
 @router.get("/stream")
 async def stream(request: Request):

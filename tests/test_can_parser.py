@@ -123,3 +123,20 @@ class TestCANParser(unittest.TestCase):
         self.assertEqual(result.led_status, 3)
         self.assertEqual(result.led_remaining_s, 10)
         self.assertEqual(result.state_revision, 42)
+
+    def test_parse_health_diag_info_reset_reasons(self):
+        # Test reset reasons: 0 (PowerOn), 1 (Watchdog), 2 (Brownout), 3 (Software), 4 (Pin)
+        for expected_reason in [0, 1, 2, 3, 4]:
+            frame = CANFrame(
+                arbitration_id=CAN_HEALTH | 22,
+                data=bytes([HEALTH_DIAG_INFO, expected_reason, 1, 2, 0, 0, 0x12, 0x34]),
+            )
+            result = self.parser.parse(frame)
+            self.assertIsInstance(result, HealthDiagInfo)
+            self.assertEqual(result.device_id, 22)
+            self.assertEqual(result.reset_reason, expected_reason)
+            self.assertEqual(result.brownout_cnt, 1)
+            self.assertEqual(result.watchdog_cnt, 2)
+            self.assertEqual(result.can_tx_err, 0)
+            self.assertEqual(result.can_rx_err, 0)
+
