@@ -44,13 +44,16 @@ The Gateway acts as the central bridge between IP networks and the low-level CAN
 ```
 
 ### Key Capabilities
-- **Automatic Discovery & Commissioning**: Real-time identification of unassigned locks (`0x7F`) by UID with single-click/single-call ID provisioning.
+- **Automatic Discovery & Commissioning**: Real-time identification of unassigned locks (`0x7F`) by UID with single-click/single-call ID provisioning and UID deduplication.
+- **Heartbeat & Offline Timeout Detection**: Continuous tracking of per-device `last_seen` timestamps with automatic transitions to `OFFLINE` status when locks cease telemetry, keeping active counts accurate.
+- **Node Deletion & Bulk Offline Pruning**: Immediate deletion of individual locks (`DELETE /devices/{id}`) and one-click bulk cleanup of offline locks (`DELETE /devices/prune-offline`) with instant real-time SSE card removal.
 - **Bi-Directional Lock Control**: Immediate unlock pulse, permanent hold open, and manual motor reset.
 - **Whitelist Management**: Slot-based RFID access management (Slot 1 Ephemeral, Slots 2..N Persistent) with custom validity (TTL in days) and local policy overrides.
 - **Door Close Guard**: Active security monitoring that triggers local optical/acoustic alarms and safe releases if doors remain open.
 - **Full Telemetry & Diagnostics**: Real-time sensing of door position, bolt state, battery/supply voltage (VCC), temperature, error counters, and bus-off recovery metrics.
 - **Data Persistence & Custom Aliases**: Non-volatile storage of device configuration, operational modes, and user-assigned names (e.g., "Locker 12") via SQLite.
-- **Asynchronous Audit Logging**: Non-blocking database tracking of access decisions, card scans, state changes, and hardware errors with real-time SSE event dispatching.  
+- **Asynchronous Audit Logging**: Non-blocking database tracking of access decisions, card scans, state changes, and hardware errors with real-time SSE event dispatching.
+- **CAN Specification v0.4r5 Alignment**: Standardized on unified OTA base ID `0x780 | devId` with MSB opcode direction signaling.  
 
 ---
 
@@ -292,6 +295,14 @@ Assigns a permanent Device ID (1..126) and bit rate code to an unprovisioned loc
 ```
 
 (Bitrate codes: `0=1k`, `1=5k`, `2=10k`, `3=25k`, `4=50k (Default)`, `5=100k`, `6=250k`, `7=500k`)
+
+#### `DELETE /devices/{id}` (alias `/locks/{id}`)
+
+Deletes an individual lock from persistent storage (SQLite `Device` table) and in-memory listener cache. Logs `DEVICE_DELETED` and broadcasts a real-time SSE event (`event: device_removed`) to immediately remove the locker card from connected Web dashboards.
+
+#### `DELETE /devices/prune-offline` (alias `/locks/prune-offline`)
+
+Bulk cleanup endpoint that finds and removes all currently offline locks (silent beyond heartbeat timeout) from database and memory in one call, dispatching real-time SSE removal events.
 
 ---
 
@@ -860,8 +871,8 @@ Formula: `CAN_ID = Base_ID | Device_ID` (Default / Unprovisioned ID = `0x7F`).
 | **ID_REQUEST** | `0x500` | Device -> Gateway | Unprovisioned boot broadcast |
 | **UID_PART1** | `0x600` | Device -> Gateway | Hardware UID Bytes 0..7 |
 | **UID_PART2** | `0x700` | Device -> Gateway | Hardware UID Bytes 8..11 |
-| **OTA_COMMAND** | `0x780` | Gateway -> Device | Dual-bank bootloader command (`0x780 \| devId`) |
-| **OTA_ACK** | `0x790` | Device -> Gateway | Bootloader flow-control & status ACK (`0x790 \| devId`) |
+| **OTA_COMMAND** | `0x780` | Gateway -> Device | Dual-bank bootloader command (`0x780 \| devId`, CAN Spec v0.4r5 unified base) |
+| **OTA_ACK** | `0x780` | Device -> Gateway | Bootloader flow-control & status ACK (`0x780 \| devId`, MSB direction response) |
 
 ---
 
