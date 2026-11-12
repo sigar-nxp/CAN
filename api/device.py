@@ -15,7 +15,9 @@ import json
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 
-from config.globals import can_listener, can_service, beacon_service
+from config import settings
+from config.globals import can_listener, can_service, beacon_service, gym_service
+from services.gym_service import GymCommandError
 from services.lock_service import LockService
 from canbus.commands import wl_write_uid, wl_write_uid_part2
 from database.database import SessionLocal
@@ -57,6 +59,9 @@ class LEDRequest(BaseModel):
 class BuzzerRequest(BaseModel):
     sound: int
     repeat: int = 1
+
+class RenameReq(BaseModel):
+    name: str
 
 class AssignRequest(BaseModel):
     uid32: Optional[Any] = None
@@ -107,6 +112,11 @@ def get_unassigned():
 
 @router.post("/devices/assign")
 def assign_device(req: AssignRequest):
+    if req.device_id == settings.UNPROVISIONED_NODE_ID:
+        raise HTTPException(status_code=400, detail="Cannot assign device to reserved unprovisioned ID 127 (0x7F)")
+    if settings.is_gym_mode() and req.device_id == settings.STAGING_NODE_ID:
+        raise HTTPException(status_code=400, detail="Cannot assign device to reserved staging ID 1 in Gym Mode")
+
     uid_hex = req.uid or req.hardware_uid
     if not uid_hex and req.uid32 is not None:
         if isinstance(req.uid32, int):
@@ -175,15 +185,19 @@ def get_locks():
 @router.get("/devices")
 def get_devices():
     devices = can_listener.devices.values()
+    devices = [d for d in devices if d.device_id != settings.UNPROVISIONED_NODE_ID]
+    if settings.is_gym_mode():
+        devices = [d for d in devices if d.device_id != settings.STAGING_NODE_ID]
     return [
         {
             "device_id": dev.device_id,
-            "name": getattr(dev, "name", f"Lock {dev.device_id}"),
+            "name": dev.display_name,
             "status": "OFFLINE" if not dev.online else dev.status_text,
             "status_text": dev.status_text,
             "online": dev.online,
             "is_online": dev.online,
             "hardware_uid": dev.hardware_uid,
+            **dev.gym_fields(),
             "active_slot": getattr(dev, "active_slot", 0),
             "target_slot": 1 if getattr(dev, "active_slot", 0) == 0 else 0,
             "target_binary": "slot_b.bin" if getattr(dev, "active_slot", 0) == 0 else "slot_a.bin",
@@ -193,6 +207,8 @@ def get_devices():
 
 @router.get("/devices/{id}")
 def get_device(id: int):
+    if id == settings.UNPROVISIONED_NODE_ID or (settings.is_gym_mode() and id == settings.STAGING_NODE_ID):
+        raise HTTPException(status_code=404, detail="Device not found")
     dev = can_listener.get_device(id)
     if not dev:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -200,11 +216,12 @@ def get_device(id: int):
     active_slot = getattr(dev, "active_slot", 0)
     return {
         "device_id": dev.device_id,
-        "name": getattr(dev, "name", f"Lock {id}"),
+        "name": dev.display_name,
         "online": dev.online,
         "is_online": dev.online,
         "status": "OFFLINE" if not dev.online else dev.status_text,
         "status_text": dev.status_text,
+        **dev.gym_fields(),
         "is_locked": dev.is_locked,
         "is_door_closed": dev.is_door_closed,
         "error_text": dev.error_text,
@@ -311,12 +328,41 @@ def open_hold_device(id: int):
     return {"status": "held open"}
 
 @router.post("/devices/{id}/reset")
-@router.post("/devices/{id}/release")
 def reset_device(id: int):
     check_device_not_in_ota(id)
     lock_service.open_reset(id)
     can_listener.add_log(id, "MANUAL_OPEN", None, "Lock reset commanded", direction="TX")
     return {"status": "open state reset"}
+
+@router.post("/devices/release-all")
+@router.post("/locks/release-all")
+def release_all_devices():
+    """
+    Bulk reception action: releases all currently occupied lockers, unlocking their bolts,
+    clearing assigned card credentials in SQLite, and broadcasting SSE updates.
+    """
+    return gym_service.force_release_all()
+
+
+@router.post("/devices/{id}/release")
+def release_device(id: int):
+    """
+    Admin override that force-vacates a locker.
+
+    In gym mode this clears the occupying card and holds the bolt open. In standard mode the
+    historical behaviour of this route (alias of /reset: relock / cancel hold) is preserved.
+    """
+    check_device_not_in_ota(id)
+    if not settings.is_gym_mode():
+        return reset_device(id)
+    _require_known_device(id)
+    try:
+        result = gym_service.force_release(id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Device not found")
+    except GymCommandError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"status": "released", **result}
 
 @router.post("/devices/{id}/led")
 def led_device(id: int, req: LEDRequest):
@@ -364,6 +410,30 @@ def set_mode(id: int, req: LockModeReq):
             
     return {"status": "mode set"}
 
+def _require_known_device(device_id: int) -> None:
+    """Raises 404 unless the device exists in memory or the database (never creates one)."""
+    if device_id in can_listener.devices:
+        return
+    with SessionLocal() as db:
+        if db.query(Device).filter(Device.device_id == device_id).first() is None:
+            raise HTTPException(status_code=404, detail="Device not found")
+
+def _rename_device(device_id: int, name: str) -> str:
+    _require_known_device(device_id)
+    try:
+        return gym_service.rename(device_id, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+@router.patch("/devices/{id}/name")
+@router.post("/devices/{id}/rename")
+def rename_device(id: int, req: RenameReq):
+    """Renames a locker (the label shown on the dashboard card header)."""
+    new_name = _rename_device(id, req.name)
+    return {"status": "renamed", "device_id": id, "name": new_name, "custom_name": new_name}
+
 class DevicePatchReq(BaseModel):
     name: Optional[str] = None
 
@@ -374,17 +444,9 @@ def update_device(id: int, req: DevicePatchReq):
         raise HTTPException(status_code=404, detail="Device not found")
         
     if req.name is not None:
-        dev.name = req.name
-        
-        from database.database import SessionLocal
-        from models.device import Device
-        with SessionLocal() as db:
-            db_dev = db.query(Device).filter(Device.device_id == id).first()
-            if db_dev:
-                db_dev.name = req.name
-                db.commit()
+        _rename_device(id, req.name)
             
-    return {"status": "updated", "name": dev.name}
+    return {"status": "updated", "name": dev.display_name}
 
 
 @router.get("/devices/{id}/mode")

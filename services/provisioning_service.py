@@ -95,10 +95,11 @@ class ProvisioningService:
         if not verified:
             raise TimeoutError(f"Device did not appear on new ID {target_device_id} after assignment.")
 
-        # Step 4: Remove from unassigned_locks
+        # Step 4: Remove from unassigned_locks and purge any transient 0x7F node
         with can_listener.lock:
             if uid32_hex in can_listener.unassigned_devices:
                 del can_listener.unassigned_devices[uid32_hex]
+        can_listener.purge_unprovisioned_node()
 
         return {
             "device_id": target_device_id,

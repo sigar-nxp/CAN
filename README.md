@@ -856,6 +856,30 @@ Returns authoritative global batch progress across all queued devices.
 
 ---
 
+### 5.11 Offline Fitness Gym Mode (Free Locker Selection)
+
+`LOCKER_OPERATION_MODE` selects the behaviour: `gym` (default) or `standard`. Read it with `GET /api/v1/system/locker-mode`; switch it at runtime (memory only, not persisted) with `PUT /api/v1/system/locker-mode` and body `{"mode": "standard"}`. Set the environment variable for a permanent default.
+
+**Card logic (gym mode).** A lock that does not know a card asks the gateway (`STATUS 0x11`). The gateway answers with the existing `AUTH_RESP` (`0x60`):
+
+| Locker | Card | Answer | Result |
+|---|---|---|---|
+| VACANT | holds no other locker | `ALLOW / CLOSE` | OCCUPIED, card and time stored |
+| VACANT | already holds another locker | `DENY` | unchanged (1 card = max 1 locker) |
+| OCCUPIED | owner card | `ALLOW / OPEN` | VACANT |
+| OCCUPIED | any other card | `DENY` | stays locked |
+
+After a claim the firmware stores the owner in ephemeral Slot 1 and answers the owner's next swipe locally (`STATUS 0x10`, `OPEN_OK`). The gateway mirrors that, and the firmware's own guest-credential auto-delete, so the database never shows a released locker as occupied.
+
+**Auto-provisioning.** Factory-tested locks ship with Device ID 1, so Node 1 is reserved as the staging ID. The firmware only accepts `ASSIGN_ID` while unprovisioned, so a lock seen on node 1 is sent `FACTORY_RESET` (`0xFB`). It reboots as `0x7F`, announces itself on `0x57F`, and receives the lowest free ID in 2..49 (48 lockers per Pi) through the normal UID assignment. A lock whose hardware UID is already registered keeps its old ID. Connect only one new lock to the bus at a time, because two nodes on ID 1 corrupt each other's frames.
+
+| Endpoint | Description |
+|---|---|
+| `PATCH /api/v1/devices/{id}/name` (alias `POST /api/v1/devices/{id}/rename`) | Body `{"name": "Spind 01"}`; 1-64 characters, no control characters. Returns 422 for invalid names and 404 for unknown devices. |
+| `POST /api/v1/devices/{id}/release` | Admin override. Clears Slot 1 (`0x3D`), holds the bolt open (`0x04`) and marks the locker vacant. Returns 503 if the CAN commands fail. In `standard` mode it keeps its historical meaning (alias of `/reset`). |
+
+Device payloads (`GET /devices`, SSE `device_update`) carry `custom_name`, `locker_state`, `assigned_card_uid` and `occupied_at` (UTC, ISO-8601 with `Z`). Existing databases are migrated automatically on startup.
+
 ## 6. CAN Protocol Reference (Standard 11-Bit)
 
 ### 6.1 11-Bit CAN Identifier Layout

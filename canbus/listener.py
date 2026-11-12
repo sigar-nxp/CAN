@@ -11,11 +11,14 @@ import os
 import threading
 import time
 import queue
-from typing import Dict, Any, Optional
+from dataclasses import dataclass
+from typing import Callable, Dict, Any, Optional
 from datetime import datetime
 import logging
 
 
+from config import settings
+from config.settings import STAGING_NODE_ID, UNPROVISIONED_NODE_ID
 from database.database import SessionLocal
 from models.log import EventLog
 from models.device import Device
@@ -23,7 +26,13 @@ from models.device import Device
 
 from .protocol import CANFrame
 from .service import CANService
-from .constants import COMMAND_NAMES
+from .constants import (
+    COMMAND_NAMES,
+    CAN_STATUS,
+    CAN_HEALTH,
+    STATUS_RFID_AUTH_REQ,
+    STATUS_RFID_LOCAL_ACTION,
+)
 from .parser import CANParser, StatusBasic, HealthStatus, StatusError, CommandAck, IdRequest, UIDPart1, UIDPart2, StatusRFID, StatusRFIDPart2, EventWlAutoDelete, HealthVersionInfo, HealthDeviceInfo, HealthShort, HealthExtended, HealthDiagInfo, HealthSecurityStatus, WlInfoReport, LockModeReport, WlListV2Item, WlListV2UidPart1, WlListV2UidPart2, OccupancyStateReport, OccupancyOwnerShort, PolicyActionReport, RuntimeStateSnapshot, DiagExtended
 logger = logging.getLogger(__name__)
 
@@ -59,6 +68,32 @@ def uids_match(uid1: Any, uid2: Any) -> bool:
     if not u1 or not u2:
         return False
     return u1 == u2 or u1.startswith(u2) or u2.startswith(u1)
+
+
+@dataclass(slots=True)
+class CardEvent:
+    """
+    Fully assembled RFID card event reported by a lock.
+
+    Attributes:
+        device_id: CAN node ID that reported the card.
+        lock_id: Logical lock index echoed back in host responses.
+        kind: "auth_request" (lock waits for an AUTH_RESP) or "local_action"
+            (lock already decided locally based on its own whitelist).
+        card_uid: Lowercase hex UID of the presented card.
+        code: Requested action (auth_request: 1=CLOSE, 2=OPEN) or local result
+            (local_action: 1=OPEN_OK, 2=CLOSE_OK).
+    """
+    device_id: int
+    lock_id: int
+    kind: str
+    card_uid: str
+    code: int
+
+
+def _utc_iso(value: Optional[datetime]) -> Optional[str]:
+    """Serializes a naive-UTC datetime as an ISO-8601 string with a 'Z' suffix."""
+    return value.isoformat() + "Z" if value else None
 
 
 class UnassignedDevice:
@@ -120,6 +155,33 @@ class DeviceState:
         self.active_slot: int = 0
         self.runtime_state: Dict[str, Any] = {}
         self.diag_extended: Dict[str, Any] = {}
+
+        # Gym mode (free locker selection) state
+        self.custom_name: str = f"Locker {device_id}"
+        self.locker_state: str = "vacant"
+        self.assigned_card_uid: Optional[str] = None
+        self.occupied_at: Optional[datetime] = None
+
+    @property
+    def display_name(self) -> str:
+        """Operator-visible label: the custom locker name, falling back to the node name."""
+        return self.custom_name or self.name
+
+    def gym_fields(self) -> Dict[str, Any]:
+        """Gym occupancy attributes shared by the REST and SSE representations."""
+        return {
+            "custom_name": self.display_name,
+            "locker_state": self.locker_state,
+            "assigned_card_uid": self.assigned_card_uid,
+            "occupied_at": _utc_iso(self.occupied_at),
+        }
+
+    def load_gym_fields(self, db_dev) -> None:
+        """Copies the persisted gym attributes from a Device row into this state object."""
+        self.custom_name = getattr(db_dev, "custom_name", None) or f"Locker {self.device_id}"
+        self.locker_state = getattr(db_dev, "locker_state", None) or "vacant"
+        self.assigned_card_uid = getattr(db_dev, "assigned_card_uid", None)
+        self.occupied_at = getattr(db_dev, "occupied_at", None)
 
     @property
     def online(self) -> bool:
@@ -231,6 +293,36 @@ class DeviceState:
             "occupancy_state": self.occupancy_state,
             "active_slot": self.active_slot,
             "is_unprovisioned": self.is_unprovisioned,
+            **self.gym_fields(),
+        }
+
+    def to_stream_payload(self) -> Dict[str, Any]:
+        """Builds the SSE ``device_update`` payload consumed by the dashboard."""
+        is_online = self.online
+        return {
+            "device_id": self.device_id,
+            "online": is_online,
+            "is_online": is_online,
+            "status": "OFFLINE" if not is_online else self.status_text,
+            "details": {
+                "name": self.display_name,
+                "is_locked": self.is_locked,
+                "is_door_closed": self.is_door_closed,
+                "status_text": self.status_text,
+                "error_text": self.error_text,
+                "last_scanned_card": self.last_scanned_card,
+                "door_close_guard_supported": self.door_close_guard_supported,
+                "hardware_uid": self.hardware_uid,
+                "full_uid": self.full_uid,
+                **self.gym_fields(),
+            },
+            "health": {
+                "health_short": self.health_short,
+                "health_extended": self.health_extended,
+                "health_diag_info": self.health_diag_info,
+                "runtime_state": self.runtime_state,
+                "diag_extended": self.diag_extended,
+            },
         }
 
 
@@ -252,6 +344,12 @@ class CANListener:
         self.log_queue = queue.Queue()
         self.recent_logs = []
         self.log_thread = None
+
+        # Optional gym-mode hooks (wired in config.globals). They are invoked outside of
+        # the listener lock so handlers may freely use listener APIs and send CAN frames.
+        self.card_event_handler: Optional[Callable[[CardEvent], None]] = None
+        self.wl_auto_delete_handler: Optional[Callable[[int], None]] = None
+        self.staging_frame_handler: Optional[Callable[[int], None]] = None
 
         if hasattr(self.can, "set_log_handler"):
             self.can.set_log_handler(self.add_log)
@@ -384,6 +482,34 @@ class CANListener:
 
         return found
 
+    def purge_staging_node(self) -> bool:
+        """
+        Removes the staging node (ID 1) from memory and database, and notifies dashboards via SSE.
+        In Gym Mode, Node 1 is strictly a transient staging address and must never remain.
+        """
+        removed = self.remove_device(STAGING_NODE_ID)
+        try:
+            from api.stream import broadcast_sse_event
+            broadcast_sse_event("device_removed", {"device_id": STAGING_NODE_ID})
+        except Exception as e:
+            logger.debug(f"Could not broadcast staging node removal: {e}")
+        self.purge_unprovisioned_node()
+        return removed
+
+    def purge_unprovisioned_node(self) -> bool:
+        """
+        Removes the unprovisioned default node (ID 127 / 0x7F) from memory and database,
+        and notifies dashboards via SSE. Node 127 is strictly a transient discovery address
+        and must never remain in DB or UI.
+        """
+        removed = self.remove_device(UNPROVISIONED_NODE_ID)
+        try:
+            from api.stream import broadcast_sse_event
+            broadcast_sse_event("device_removed", {"device_id": UNPROVISIONED_NODE_ID})
+        except Exception as e:
+            logger.debug(f"Could not broadcast unprovisioned node removal: {e}")
+        return removed
+
     def prune_offline_devices(self) -> list:
         """
         Removes all devices that are currently offline from memory and SQLite database.
@@ -498,6 +624,9 @@ class CANListener:
     def start(self):
         if self.running:
             return
+        if settings.is_gym_mode():
+            self.purge_staging_node()
+        self.purge_unprovisioned_node()
         self.preload_devices_from_db()
         self.running = True
         self.log_queue = queue.Queue()
@@ -512,9 +641,28 @@ class CANListener:
         from models.device import Device
         
         with SessionLocal() as db:
+            # Purge transient node 127 (0x7F) from SQLite
+            stale_unprov = db.query(Device).filter(Device.device_id == UNPROVISIONED_NODE_ID).first()
+            if stale_unprov:
+                logger.info("Purging stale unprovisioned node 127 from database.")
+                db.delete(stale_unprov)
+                db.commit()
+
+            if settings.is_gym_mode():
+                # Purge any stale staging node from SQLite in Gym Mode
+                stale_staging = db.query(Device).filter(Device.device_id == STAGING_NODE_ID).first()
+                if stale_staging:
+                    logger.info("Purging stale staging node 1 from database in Gym Mode.")
+                    db.delete(stale_staging)
+                    db.commit()
+
             devices = db.query(Device).all()
             with self.lock:
                 for db_dev in devices:
+                    if db_dev.device_id == UNPROVISIONED_NODE_ID:
+                        continue
+                    if settings.is_gym_mode() and db_dev.device_id == STAGING_NODE_ID:
+                        continue
                     dev = DeviceState(db_dev.device_id, offline_timeout=self.offline_timeout)
                     dev.name = db_dev.name
                     dev.hardware_uid = getattr(db_dev, "hardware_uid", None)
@@ -524,11 +672,16 @@ class CANListener:
                     dev.lock_mode_behavior_flags = db_dev.behavior_flags
                     dev.active_slot = getattr(db_dev, "active_slot", 0) or 0
                     dev.last_seen = db_dev.last_seen or 0.0
+                    dev.load_gym_fields(db_dev)
                     self.devices[db_dev.device_id] = dev
         logger.info(f"Preloaded {len(self.devices)} devices from database.")
 
     def get_device(self, device_id: int) -> DeviceState:
         with self.lock:
+            if device_id == UNPROVISIONED_NODE_ID:
+                # Node 127 is strictly transient unprovisioned discovery; never cache or persist
+                return DeviceState(device_id, offline_timeout=self.offline_timeout)
+
             if device_id not in self.devices:
                 self.devices[device_id] = DeviceState(device_id, offline_timeout=self.offline_timeout)
                 
@@ -548,19 +701,23 @@ class CANListener:
                             self.devices[device_id].lock_mode_behavior_flags = db_dev.behavior_flags
                             self.devices[device_id].active_slot = getattr(db_dev, "active_slot", 0) or 0
                             self.devices[device_id].last_seen = db_dev.last_seen or 0.0
+                            self.devices[device_id].load_gym_fields(db_dev)
                         else:
-                            new_dev = Device(
-                                device_id=device_id,
-                                name=f"Lock {device_id}",
-                                hardware_uid=None,
-                                lock_mode=1,
-                                auto_close_timeout=3,
-                                behavior_flags=0,
-                                active_slot=0,
-                                last_seen=0.0
-                            )
-                            db.add(new_dev)
-                            db.commit()
+                            # Transient IDs (127, and 1 in Gym Mode) must never be created as a registered row
+                            if not (device_id == UNPROVISIONED_NODE_ID or (settings.is_gym_mode() and device_id == STAGING_NODE_ID)):
+                                new_dev = Device(
+                                    device_id=device_id,
+                                    name=f"Lock {device_id}",
+                                    custom_name=f"Locker {device_id}",
+                                    hardware_uid=None,
+                                    lock_mode=1,
+                                    auto_close_timeout=3,
+                                    behavior_flags=0,
+                                    active_slot=0,
+                                    last_seen=0.0
+                                )
+                                db.add(new_dev)
+                                db.commit()
                 except Exception as e:
                     logger.error(f"Failed to query/save device in DB: {e}")
 
@@ -600,9 +757,76 @@ class CANListener:
         try:
             can_id_str = f"0x{frame.arbitration_id:03X}"
             payload_hex = " ".join(f"{b:02X}" for b in frame.data)
+            dev_id = frame.device_id
+
+            # Gym Mode: Node ID 1 is strictly a transient staging address for factory-tested locks
+            # and must NEVER be persisted in the devices table or exposed as a locker card.
+            if settings.is_gym_mode() and dev_id == STAGING_NODE_ID:
+                self.add_log(
+                    dev_id,
+                    "STAGING_FRAME",
+                    None,
+                    f"Frame {can_id_str} on staging node 1; triggering auto-provisioning",
+                    direction="RX",
+                    can_id=can_id_str,
+                    payload=payload_hex,
+                )
+                self._notify_staging_frame(dev_id)
+                return
+
+            # Node 127 (0x7F) is strictly unprovisioned discovery traffic.
+            # Never create, persist, or emit device_update for device_id == 127.
+            if dev_id == UNPROVISIONED_NODE_ID:
+                msg = self.parser.parse(frame)
+                if isinstance(msg, IdRequest):
+                    uid_hex = msg.uid32.hex().lower()
+                    with self.lock:
+                        if uid_hex not in self.unassigned_devices:
+                            self.unassigned_devices[uid_hex] = UnassignedDevice(msg.uid32)
+                        self.unassigned_devices[uid_hex].last_seen = time.time()
+
+                        for registered_id, registered_dev in list(self.devices.items()):
+                            if registered_id not in (STAGING_NODE_ID, UNPROVISIONED_NODE_ID) and (
+                                uids_match(registered_dev.hardware_uid, uid_hex) or uids_match(registered_dev.full_uid, uid_hex)
+                            ):
+                                registered_dev.mark_offline(unprovisioned=True)
+                                logger.warning(
+                                    f"Registered device {registered_id} announced as unassigned (factory reset); marked OFFLINE/UNPROVISIONED."
+                                )
+                                self.add_log(
+                                    registered_id,
+                                    "UNASSIGNED_ANNOUNCEMENT",
+                                    uid_hex,
+                                    f"Node {registered_id} announced as unassigned (factory reset); marked OFFLINE/UNPROVISIONED",
+                                    direction="RX",
+                                    can_id=can_id_str,
+                                    payload=payload_hex
+                                )
+                elif isinstance(msg, UIDPart1):
+                    with self.lock:
+                        self.latest_uid_part1 = msg.uid
+                elif isinstance(msg, UIDPart2):
+                    with self.lock:
+                        self.latest_uid_part2 = msg.uid
+                else:
+                    self.add_log(
+                        dev_id,
+                        "UNPROVISIONED_FRAME",
+                        None,
+                        f"Frame {can_id_str} on unprovisioned node 127 (0x7F)",
+                        direction="RX",
+                        can_id=can_id_str,
+                        payload=payload_hex,
+                    )
+                return
+
             msg = self.parser.parse(frame)
+            card_event: Optional[CardEvent] = None
+            wl_auto_deleted = False
             if msg is not None:
-                dev_id = frame.device_id
+                # A node reporting on the reserved staging ID in non-gym mode (if hook configured)
+                if dev_id == STAGING_NODE_ID and frame.message_type in (CAN_STATUS, CAN_HEALTH):
+                    self._notify_staging_frame(dev_id)
 
                 if isinstance(msg, StatusBasic):
                     dev = self.get_device(dev_id)
@@ -705,6 +929,7 @@ class CANListener:
                             dev.last_scanned_card = uid_hex
                             dev._partial_rfid = None
                             self.add_log(dev_id, "RFID_SCAN", uid_hex, "Card scanned (4-byte)", direction="RX", can_id=can_id_str, payload=payload_hex)
+                            card_event = self._build_card_event(msg, uid_hex)
                         else:
                             dev._partial_rfid = msg
                         dev.mark_seen()
@@ -717,6 +942,7 @@ class CANListener:
                             if expected_len <= len(full_uid_bytes):
                                 uid_hex = full_uid_bytes[:expected_len].hex()
                                 dev.last_scanned_card = uid_hex
+                                card_event = self._build_card_event(dev._partial_rfid, uid_hex)
                                 dev._partial_rfid = None
                                 self.add_log(dev_id, "RFID_SCAN", uid_hex, "Card scanned (7-byte)", direction="RX", can_id=can_id_str, payload=payload_hex)
                         dev.mark_seen()
@@ -727,6 +953,7 @@ class CANListener:
                             del dev.whitelist_items[1]
                         dev.occupancy_state["occupied"] = False
                         dev.mark_seen()
+                    wl_auto_deleted = True
                 elif isinstance(msg, CommandAck):
                     dev = self.get_device(dev_id)
                     with self.lock:
@@ -901,6 +1128,43 @@ class CANListener:
                         })
                         dev.mark_seen()
 
+                # Gym hooks run after the per-message state update and outside of the listener lock
+                if card_event is not None and self.card_event_handler is not None:
+                    self._run_hook(self.card_event_handler, card_event)
+                if wl_auto_deleted and self.wl_auto_delete_handler is not None:
+                    self._run_hook(self.wl_auto_delete_handler, dev_id)
 
         except Exception as e:
             logger.error(f"CANListener handle_frame error: {e}")
+
+    @staticmethod
+    def _build_card_event(msg: StatusRFID, uid_hex: str) -> Optional[CardEvent]:
+        """Maps a decoded RFID status frame to a CardEvent (auth request or local action)."""
+        if not uid_hex:
+            return None
+        if msg.action_type == STATUS_RFID_AUTH_REQ:
+            kind = "auth_request"
+        elif msg.action_type == STATUS_RFID_LOCAL_ACTION:
+            kind = "local_action"
+        else:
+            return None
+        return CardEvent(
+            device_id=msg.device_id,
+            lock_id=msg.lock_id,
+            kind=kind,
+            card_uid=uid_hex,
+            code=msg.result_or_action,
+        )
+
+    @staticmethod
+    def _run_hook(handler: Callable, *args) -> None:
+        """Invokes an optional hook, isolating the CAN reader from handler failures."""
+        try:
+            handler(*args)
+        except Exception as e:
+            logger.error(f"CANListener hook error: {e}")
+
+    def _notify_staging_frame(self, dev_id: int) -> None:
+        """Notifies the staging hook that a node is active on the reserved onboarding ID."""
+        if self.staging_frame_handler is not None:
+            self._run_hook(self.staging_frame_handler, dev_id)

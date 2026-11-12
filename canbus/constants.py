@@ -41,6 +41,7 @@ DEVICE_MASK = 0x0FF
 TYPE_MASK = 0x700
 
 DEFAULT_DEVICE_ID = 0x7F
+UNPROVISIONED_NODE_ID = 0x7F
 
 # ==========================================================
 # COMMANDS
@@ -97,7 +98,23 @@ STATUS_ERROR = 0xFF
 # ==========================================================
 # RFID & HEALTH
 # ==========================================================
+# Local whitelist action report (lock decided on its own; result: 0x01 OPEN_OK, 0x02 CLOSE_OK)
+STATUS_RFID_LOCAL_ACTION = 0x10
+# Cloud authorization request (lock asks the gateway; byte 2 = requested action)
+STATUS_RFID_AUTH_REQ = 0x11
+STATUS_RFID_LOCAL_ACTION_PART2 = 0x13
 STATUS_RFID_AUTH_REQ_PART2 = 0x14
+
+# Local action result codes (STATUS_RFID_LOCAL_ACTION byte 2)
+LOCAL_RESULT_OPEN_OK = 0x01
+LOCAL_RESULT_CLOSE_OK = 0x02
+
+# AUTH_RESP / AUTH_REQ payload values
+AUTH_RESULT_DENY = 0
+AUTH_RESULT_ALLOW = 1
+AUTH_ACTION_NONE = 0
+AUTH_ACTION_CLOSE = 1
+AUTH_ACTION_OPEN = 2
 STATUS_EVENT_WL_AUTO_DELETE = 0x38
 
 HEALTH_SHORT = 0x01

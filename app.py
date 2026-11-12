@@ -14,7 +14,8 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
-from database.database import Base, engine
+from database.database import Base, engine, ensure_db_schema
+from config import settings
 from api.device import router as devices_router
 from api.system import router as system_router
 from config.globals import can_service, can_listener, beacon_service
@@ -29,9 +30,9 @@ from api.logs import router as logs_router
 
 logger = logging.getLogger(__name__)
 
-# Create database tables and ensure schema
-from database.database import ensure_db_schema
+# Create database tables, ensure schema, and load persisted operation mode
 ensure_db_schema()
+settings.load_locker_operation_mode()
 
 
 @asynccontextmanager
@@ -44,6 +45,9 @@ async def lifespan(app: FastAPI):
     Upon application shutdown, gracefully terminates all CAN services.
     """
     logger.info("Initializing PS Locks OIP services...")
+    settings.load_locker_operation_mode()
+    if settings.is_gym_mode():
+        can_listener.purge_staging_node()
     try:
         loop = asyncio.get_running_loop()
         can_service.set_loop(loop)
@@ -101,6 +105,16 @@ def root(request: Request):
         "project": "PS Locks OIP",
         "status": "online"
     }
+
+
+@app.get("/gym", response_class=HTMLResponse)
+def gym_ui():
+    """Serve the standalone offline-capable web UI tailored for fitness studio staff."""
+    template_path = os.path.join(os.path.dirname(__file__), "templates", "gym.html")
+    if os.path.exists(template_path):
+        with open(template_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    return HTMLResponse(content="<h1>Gym UI template not found</h1>", status_code=404)
 
 
 app.include_router(

@@ -18,6 +18,7 @@ import tempfile
 import time
 from typing import Any, Dict, Optional
 import pytest
+from unittest.mock import patch
 import requests
 
 # Isolate test process from physical CAN bus to prevent listener conflict with running gateway
@@ -205,7 +206,9 @@ def test_led_and_buzzer_remote_overrides(client: SystemE2EClient):
     def _send_mock_ack(cmd: int):
         if not client.is_live:
             from canbus.constants import STATUS_COMMAND_ACK
-            can_listener.handle_frame(CANFrame(arbitration_id=0x200 | 1, data=bytes([STATUS_COMMAND_ACK, 0, cmd, 1])))
+            # handle_frame ignores frames while the listener is stopped (no lifespan in TestClient)
+            with patch.object(can_listener, "running", True):
+                can_listener.handle_frame(CANFrame(arbitration_id=0x200 | 1, data=bytes([STATUS_COMMAND_ACK, 0, cmd, 1])))
         else:
             try:
                 import can

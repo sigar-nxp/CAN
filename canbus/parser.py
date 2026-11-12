@@ -348,11 +348,11 @@ class CANParser:
                     error_code=data[1],
                     lock_id=data[2],
                     cmd=data[3] if len(data) >= 5 else 0,
-                    corr_id=data[4] if len(data) >= 5 else 0
+                    corr_id =data[4] if len(data) >= 5 else 0
                 )
 
             
-            if sub == STATUS_RFID_AUTH_REQ_PART2 and len(data) >= 4:
+            if sub in (STATUS_RFID_AUTH_REQ_PART2, STATUS_RFID_LOCAL_ACTION_PART2) and len(data) >= 4:
                 return StatusRFIDPart2(
                     device_id=dev_id,
                     lock_id=data[1],

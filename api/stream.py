@@ -4,6 +4,7 @@ from typing import Any, Dict, Tuple
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from config import settings
 from config.globals import can_listener, beacon_service
 
 router = APIRouter(tags=["Stream"])
@@ -104,6 +105,10 @@ async def event_stream(request: Request):
 
             # Check devices
             current_device_ids = set(can_listener.devices.keys())
+            current_device_ids.discard(settings.UNPROVISIONED_NODE_ID)
+            if settings.is_gym_mode():
+                current_device_ids.discard(settings.STAGING_NODE_ID)
+
             # Detect removed devices
             for dev_id in list(last_device_seen.keys()):
                 if dev_id not in current_device_ids:
@@ -112,6 +117,10 @@ async def event_stream(request: Request):
                     yield f"event: device_removed\ndata: {json.dumps({'device_id': dev_id})}\n\n"
 
             for dev_id, dev in list(can_listener.devices.items()):
+                if dev_id == settings.UNPROVISIONED_NODE_ID:
+                    continue
+                if settings.is_gym_mode() and dev_id == settings.STAGING_NODE_ID:
+                    continue
                 is_online = dev.online
                 if (dev_id not in last_device_seen 
                     or last_device_seen[dev_id] != dev.last_seen 
@@ -120,32 +129,7 @@ async def event_stream(request: Request):
                     last_device_seen[dev_id] = dev.last_seen
                     last_device_online[dev_id] = is_online
                     
-                    details = {
-                        "name": getattr(dev, "name", f"Lock {dev_id}"),
-                        "is_locked": dev.is_locked,
-                        "is_door_closed": dev.is_door_closed,
-                        "status_text": dev.status_text,
-                        "error_text": dev.error_text,
-                        "last_scanned_card": dev.last_scanned_card,
-                        "door_close_guard_supported": dev.door_close_guard_supported,
-                        "hardware_uid": dev.hardware_uid,
-                        "full_uid": dev.full_uid,
-                    }
-                    health = {
-                        "health_short": dev.health_short,
-                        "health_extended": dev.health_extended,
-                        "health_diag_info": dev.health_diag_info,
-                        "runtime_state": dev.runtime_state,
-                        "diag_extended": dev.diag_extended
-                    }
-                    data = {
-                        "device_id": dev_id,
-                        "online": is_online,
-                        "is_online": is_online,
-                        "status": "OFFLINE" if not is_online else dev.status_text,
-                        "details": details,
-                        "health": health
-                    }
+                    data = dev.to_stream_payload()
                     yield f"event: device_update\ndata: {json.dumps(data)}\n\n"
 
             # Check unassigned

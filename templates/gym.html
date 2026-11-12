@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PS Locks — Gym Locker Reception</title>
+    <style>
+        :root {
+            --bg-body: #f1f5f9;
+            --bg-surface: #ffffff;
+            --bg-header: #0f172a;
+            --bg-sub: #1e293b;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border-light: #e2e8f0;
+            --border-med: #cbd5e1;
+            --green-bg: #ecfdf5;
+            --green-border: #6ee7b7;
+            --green-text: #065f46;
+            --green-dot: #10b981;
+            --red-bg: #fff1f2;
+            --red-border: #fda4af;
+            --red-text: #9f1239;
+            --red-dot: #e11d48;
+            --red-btn: #e11d48;
+            --red-btn-hover: #be123c;
+            --gray-bg: #f1f5f9;
+            --gray-border: #cbd5e1;
+            --gray-text: #475569;
+            --gray-dot: #94a3b8;
+            --cyan-accent: #06b6d4;
+            --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg-body);
+            color: var(--text-main);
+            font-family: var(--font-sans);
+            min-height: 100vh;
+            padding-bottom: 3rem;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Header */
+        .top-header {
+            background: var(--bg-header);
+            color: #f8fafc;
+            border-bottom: 1px solid #1e293b;
+            position: sticky;
+            top: 0;
+            z-index: 30;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        }
+        .header-inner {
+            max-width: 1360px;
+            margin: 0 auto;
+            padding: 0.85rem 1.25rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+        .brand-group {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .brand-icon {
+            width: 2.25rem;
+            height: 2.25rem;
+            border-radius: 0.5rem;
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: #22d3ee;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .brand-title {
+            font-weight: 800;
+            font-size: 1.05rem;
+            letter-spacing: -0.01em;
+            color: #ffffff;
+        }
+        .brand-subtitle {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #94a3b8;
+            display: block;
+            margin-top: 0.1rem;
+        }
+
+        .header-controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        /* Mode Switcher */
+        .mode-switcher {
+            display: inline-flex;
+            align-items: center;
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 0.5rem;
+            padding: 0.2rem;
+            gap: 0.2rem;
+        }
+        .mode-switcher-label {
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            color: #94a3b8;
+            padding: 0 0.45rem;
+            font-weight: 600;
+        }
+        .mode-btn {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 0.35rem 0.7rem;
+            border-radius: 0.35rem;
+            border: none;
+            background: transparent;
+            color: #cbd5e1;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .mode-btn:hover {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .mode-btn.active-gym {
+            background: #10b981;
+            color: #022c22;
+        }
+        .mode-btn.active-standard {
+            background: #38bdf8;
+            color: #082f49;
+        }
+
+        /* Stream pill & Gateway link */
+        .stream-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            background: #1e293b;
+            border: 1px solid #334155;
+            padding: 0.35rem 0.7rem;
+            border-radius: 0.45rem;
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: #34d399;
+        }
+        .stream-pill.disconnected {
+            color: #fb7185;
+        }
+        .status-dot {
+            width: 0.5rem;
+            height: 0.5rem;
+            border-radius: 50%;
+            display: inline-block;
+            background: currentColor;
+        }
+        .gateway-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            background: #1e293b;
+            border: 1px solid #475569;
+            color: #e2e8f0;
+            text-decoration: none;
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.4rem 0.8rem;
+            border-radius: 0.45rem;
+            transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .gateway-link:hover {
+            background: #334155;
+            border-color: #64748b;
+            color: #ffffff;
+        }
+
+        /* Summary Counter Bar & Search Toolbar */
+        .toolbar-section {
+            max-width: 1360px;
+            margin: 1.25rem auto 0;
+            padding: 0 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .counters-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 0.85rem;
+        }
+        .counter-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-light);
+            border-radius: 0.65rem;
+            padding: 0.9rem 1.15rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+        }
+        .counter-card.vacant { border-left: 4px solid var(--green-dot); }
+        .counter-card.occupied { border-left: 4px solid var(--red-dot); }
+        .counter-card.offline { border-left: 4px solid var(--gray-dot); }
+        .counter-label {
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+        }
+        .counter-sub {
+            font-size: 0.7rem;
+            color: #94a3b8;
+            margin-top: 0.15rem;
+        }
+        .counter-value {
+            font-family: var(--font-mono);
+            font-size: 1.75rem;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+        }
+        .counter-card.vacant .counter-value { color: var(--green-text); }
+        .counter-card.occupied .counter-value { color: var(--red-text); }
+        .counter-card.offline .counter-value { color: var(--gray-text); }
+
+        /* Filter & Search Bar */
+        .filter-bar {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-light);
+            border-radius: 0.65rem;
+            padding: 0.75rem 1rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+        }
+        .search-wrapper {
+            position: relative;
+            flex: 1 1 260px;
+            max-width: 460px;
+        }
+        .search-input {
+            width: 100%;
+            padding: 0.5rem 2rem 0.5rem 0.75rem;
+            border: 1px solid var(--border-med);
+            border-radius: 0.45rem;
+            font-size: 0.85rem;
+            font-family: var(--font-sans);
+            color: var(--text-main);
+            outline: none;
+        }
+        .search-input:focus {
+            border-color: #0284c7;
+            box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.15);
+        }
+        .search-clear {
+            position: absolute;
+            right: 0.5rem;
+            top: 50%;
+            transform: translateY(-50%);
+            border: none;
+            background: none;
+            color: #94a3b8;
+            font-size: 1rem;
+            cursor: pointer;
+            padding: 0.15rem 0.3rem;
+        }
+        .filter-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+        }
+        .filter-pill {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.4rem 0.75rem;
+            border-radius: 0.4rem;
+            border: 1px solid var(--border-med);
+            background: #f8fafc;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .filter-pill.active {
+            background: #0f172a;
+            color: #ffffff;
+            border-color: #0f172a;
+        }
+
+        /* Standard mode notice banner */
+        .mode-banner {
+            max-width: 1360px;
+            margin: 1rem auto 0;
+            padding: 0 1.25rem;
+        }
+        .mode-banner-inner {
+            background: #fffbeb;
+            border: 1px solid #fde68a;
+            border-left: 4px solid #f59e0b;
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            font-size: 0.82rem;
+            color: #92400e;
+        }
+        .hidden { display: none !important; }
+
+        /* Locker Grid */
+        .grid-container {
+            max-width: 1360px;
+            margin: 1.25rem auto 0;
+            padding: 0 1.25rem;
+        }
+        .locker-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(265px, 1fr));
+            gap: 1rem;
+        }
+        .locker-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-light);
+            border-radius: 0.65rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+            overflow: hidden;
+        }
+        .locker-card:hover {
+            box-shadow: 0 4px 12px rgba(15, 23, 42, 0.07);
+        }
+        .locker-card.state-vacant { border-top: 4px solid var(--green-dot); }
+        .locker-card.state-occupied { border-top: 4px solid var(--red-dot); }
+        .locker-card.state-offline { border-top: 4px solid var(--gray-dot); opacity: 0.85; }
+
+        .card-header {
+            padding: 0.85rem 1rem;
+            border-bottom: 1px solid var(--border-light);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+        .card-title-group {
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            min-width: 0;
+            flex: 1;
+        }
+        .node-badge {
+            font-family: var(--font-mono);
+            font-size: 0.72rem;
+            font-weight: 700;
+            padding: 0.15rem 0.45rem;
+            border-radius: 0.3rem;
+            background: #f1f5f9;
+            border: 1px solid var(--border-med);
+            color: #334155;
+            flex-shrink: 0;
+        }
+        .locker-name {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-main);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .rename-btn {
+            border: none;
+            background: transparent;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 0.25rem;
+            border-radius: 0.3rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .rename-btn:hover {
+            color: #0f172a;
+            background: #f1f5f9;
+        }
+        .rename-input {
+            flex: 1;
+            min-width: 0;
+            font-size: 0.9rem;
+            font-weight: 700;
+            padding: 0.2rem 0.45rem;
+            border: 1px solid #0284c7;
+            border-radius: 0.3rem;
+            outline: none;
+        }
+
+        /* Status Badges */
+        .badge {
+            font-family: var(--font-mono);
+            font-size: 0.7rem;
+            font-weight: 700;
+            padding: 0.2rem 0.55rem;
+            border-radius: 9999px;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            flex-shrink: 0;
+            text-transform: uppercase;
+        }
+        .badge-vacant {
+            background: var(--green-bg);
+            color: var(--green-text);
+            border: 1px solid var(--green-border);
+        }
+        .badge-occupied {
+            background: var(--red-bg);
+            color: var(--red-text);
+            border: 1px solid var(--red-border);
+        }
+        .badge-offline {
+            background: var(--gray-bg);
+            color: var(--gray-text);
+            border: 1px solid var(--gray-border);
+        }
+
+        .card-body {
+            padding: 0.9rem 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            flex: 1;
+            justify-content: space-between;
+        }
+        .info-box {
+            border-radius: 0.45rem;
+            padding: 0.65rem 0.75rem;
+            font-size: 0.8rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+        .info-box.vacant {
+            background: #f8fafc;
+            border: 1px solid var(--border-light);
+            color: var(--text-muted);
+        }
+        .info-box.occupied {
+            background: var(--red-bg);
+            border: 1px solid var(--red-border);
+            color: var(--red-text);
+        }
+        .info-box.offline {
+            background: #f8fafc;
+            border: 1px dashed var(--border-med);
+            color: var(--text-muted);
+        }
+        .info-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+        .info-key {
+            font-family: var(--font-mono);
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            opacity: 0.8;
+        }
+        .info-val {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            font-weight: 700;
+        }
+
+        .release-btn {
+            width: 100%;
+            background: var(--red-btn);
+            color: #ffffff;
+            border: 1px solid #9f1239;
+            border-radius: 0.45rem;
+            padding: 0.55rem 0.75rem;
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+        .release-btn:hover {
+            background: var(--red-btn-hover);
+        }
+        .release-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        .card-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 0.45rem;
+        }
+        .card-actions-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.45rem;
+        }
+        .secondary-btn {
+            width: 100%;
+            background: #f8fafc;
+            color: #334155;
+            border: 1px solid var(--border-med);
+            border-radius: 0.45rem;
+            padding: 0.48rem 0.65rem;
+            font-family: var(--font-mono);
+            font-size: 0.74rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.35rem;
+        }
+        .secondary-btn:hover {
+            background: #e2e8f0;
+            color: #0f172a;
+            border-color: #94a3b8;
+        }
+        .secondary-btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        .release-all-btn {
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 0.42rem 0.85rem;
+            border-radius: 0.4rem;
+            border: 1px solid #9f1239;
+            background: var(--red-btn);
+            color: #ffffff;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+        .release-all-btn:hover:not(:disabled) {
+            background: var(--red-btn-hover);
+        }
+        .release-all-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            background: #94a3b8;
+            border-color: #94a3b8;
+        }
+
+        .empty-state {
+            background: var(--bg-surface);
+            border: 1px dashed var(--border-med);
+            border-radius: 0.65rem;
+            padding: 3rem 1.5rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+        }
+
+        /* Toast Container */
+        #toast-container {
+            position: fixed;
+            bottom: 1.25rem;
+            right: 1.25rem;
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .toast {
+            background: #0f172a;
+            color: #f8fafc;
+            border-left: 4px solid #38bdf8;
+            padding: 0.65rem 1rem;
+            border-radius: 0.4rem;
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            min-width: 240px;
+        }
+        .toast.success { border-left-color: #10b981; color: #6ee7b7; }
+        .toast.error { border-left-color: #f43f5e; color: #fda4af; }
+    </style>
+</head>
+<body>
+
+    <header class="top-header">
+        <div class="header-inner">
+            <div class="brand-group">
+                <span class="brand-icon" aria-hidden="true">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                    </svg>
+                </span>
+                <div>
+                    <div class="brand-title">PS LOCKS — GYM RECEPTION</div>
+                    <span class="brand-subtitle">Fitness Studio Locker Management (Offline-Capable)</span>
+                </div>
+            </div>
+
+            <div class="header-controls">
+                <!-- Global Persistent Mode Switcher -->
+                <div class="mode-switcher" role="group" aria-label="Global Operation Mode">
+                    <span class="mode-switcher-label">Mode:</span>
+                    <button type="button" id="mode-switcher-gym" onclick="switchOperationMode('gym')" class="mode-btn active-gym">Gym Mode</button>
+                    <button type="button" id="mode-switcher-standard" onclick="switchOperationMode('standard')" class="mode-btn">Standard Mode</button>
+                </div>
+
+                <!-- Live SSE Status -->
+                <div id="sse-status" class="stream-pill">
+                    <span class="status-dot"></span>
+                    <span id="sse-status-label">STREAM: LIVE</span>
+                </div>
+
+                <!-- Link back to Technical Gateway View -->
+                <a href="/" id="technical-gateway-link" class="gateway-link" title="Open Technical Gateway Console">
+                    <span>⚙ Technical Console (/)</span>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Notice when Standard Mode is active -->
+    <div id="standard-mode-banner" class="mode-banner hidden">
+        <div class="mode-banner-inner">
+            <span><strong>Standard Mode Active:</strong> Automatic free-locker card assignment is paused. Switch back to <strong>Gym Mode</strong> for autonomous studio locker selection.</span>
+            <button type="button" onclick="switchOperationMode('gym')" class="mode-btn active-gym">Activate Gym Mode</button>
+        </div>
+    </div>
+
+    <!-- Summary Counters & Filter Bar -->
+    <section class="toolbar-section">
+        <div class="counters-grid">
+            <div class="counter-card vacant">
+                <div>
+                    <div class="counter-label">Vacant / Frei</div>
+                    <div class="counter-sub">Online &amp; available for members</div>
+                </div>
+                <div id="stat-vacant-lockers" class="counter-value">0</div>
+            </div>
+            <div class="counter-card occupied">
+                <div>
+                    <div class="counter-label">Occupied / Belegt</div>
+                    <div class="counter-sub">Assigned to a member card</div>
+                </div>
+                <div id="stat-occupied-lockers" class="counter-value">0</div>
+            </div>
+            <div class="counter-card offline">
+                <div>
+                    <div class="counter-label">Offline</div>
+                    <div class="counter-sub">Not reachable on CAN bus</div>
+                </div>
+                <div id="stat-offline-lockers" class="counter-value">0</div>
+            </div>
+        </div>
+
+        <div class="filter-bar">
+            <div class="search-wrapper">
+                <input type="text" id="locker-search-input" class="search-input" oninput="renderAllLockers()" placeholder="Search locker name, #ID, or card UID...">
+                <button type="button" class="search-clear" onclick="clearSearch()" title="Clear search">&times;</button>
+            </div>
+            <div class="filter-pills" role="group" aria-label="Filter Lockers">
+                <button type="button" data-filter="ALL" onclick="setStatusFilter('ALL')" class="filter-pill active">All Lockers</button>
+                <button type="button" data-filter="VACANT" onclick="setStatusFilter('VACANT')" class="filter-pill">Vacant / Frei</button>
+                <button type="button" data-filter="OCCUPIED" onclick="setStatusFilter('OCCUPIED')" class="filter-pill">Occupied / Belegt</button>
+                <button type="button" data-filter="OFFLINE" onclick="setStatusFilter('OFFLINE')" class="filter-pill">Offline</button>
+                <button type="button" id="release-all-btn" onclick="releaseAllLockers()" class="release-all-btn" disabled title="Force release and unlock all currently occupied lockers">
+                    <span>Release All</span>
+                </button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Locker Card Grid -->
+    <main class="grid-container">
+        <div id="locker-grid" class="locker-grid"></div>
+        <div id="locker-empty-state" class="empty-state hidden">
+            No lockers match the current filter.
+        </div>
+    </main>
+
+    <div id="toast-container"></div>
+
+    <script>
+        const API = {
+            async get(url) {
+                const res = await fetch(url);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                return data;
+            },
+            async post(url, body) {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: body ? { 'Content-Type': 'application/json' } : {},
+                    body: body ? JSON.stringify(body) : undefined
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                return data;
+            },
+            async put(url, body) {
+                const res = await fetch(url, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                return data;
+            },
+            async patch(url, body) {
+                const res = await fetch(url, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+                return data;
+            }
+        };
+
+        let devices = [];
+        let lockerMode = 'gym';
+        let statusFilter = 'ALL';
+        let editingNameId = null;
+
+        function escapeHtml(str) {
+            if (str === null || str === undefined) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            if (!container) return;
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.innerHTML = `<span>${escapeHtml(message)}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function isTransientNode(id) {
+            return id === 1 || id === 127;
+        }
+
+        function isDeviceOnline(d) {
+            return Boolean(d.is_online !== undefined ? d.is_online : d.online);
+        }
+
+        function getDetails(d) {
+            return d.details || d;
+        }
+
+        function getLockerCategory(d) {
+            if (!isDeviceOnline(d)) return 'OFFLINE';
+            const det = getDetails(d);
+            return det.locker_state === 'occupied' ? 'OCCUPIED' : 'VACANT';
+        }
+
+        function formatOccupationTime(iso) {
+            if (!iso) return '--';
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return '--';
+            const now = new Date();
+            const diffMin = Math.max(0, Math.floor((now - d) / 60000));
+            const timeStr = d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' });
+            if (diffMin < 1) return `${timeStr} (<1m)`;
+            if (diffMin < 60) return `${timeStr} (${diffMin}m)`;
+            const hrs = Math.floor(diffMin / 60);
+            const mins = diffMin % 60;
+            return `${timeStr} (${hrs}h ${mins}m)`;
+        }
+
+        function applyModeUI(mode) {
+            lockerMode = mode === 'standard' ? 'standard' : 'gym';
+            const gymBtn = document.getElementById('mode-switcher-gym');
+            const stdBtn = document.getElementById('mode-switcher-standard');
+            const banner = document.getElementById('standard-mode-banner');
+            if (gymBtn) {
+                gymBtn.className = lockerMode === 'gym' ? 'mode-btn active-gym' : 'mode-btn';
+            }
+            if (stdBtn) {
+                stdBtn.className = lockerMode === 'standard' ? 'mode-btn active-standard' : 'mode-btn';
+            }
+            if (banner) {
+                banner.classList.toggle('hidden', lockerMode === 'gym');
+            }
+        }
+
+        async function fetchLockerMode() {
+            try {
+                const res = await API.get('/api/v1/system/locker-mode');
+                if (res && res.mode) applyModeUI(res.mode);
+            } catch (e) {}
+        }
+
+        async function switchOperationMode(targetMode) {
+            try {
+                const res = await API.put('/api/v1/system/locker-mode', { mode: targetMode });
+                applyModeUI(res.mode);
+                showToast(`Switched to ${res.mode === 'gym' ? 'Gym Mode' : 'Standard Mode'}`, 'success');
+                await fetchDevices();
+            } catch (e) {
+                showToast(e.message || 'Failed to switch mode', 'error');
+            }
+        }
+
+        function updateSummaryCounters() {
+            const valid = devices.filter(d => !isTransientNode(d.device_id));
+            const vacant = valid.filter(d => getLockerCategory(d) === 'VACANT').length;
+            const occupied = valid.filter(d => getLockerCategory(d) === 'OCCUPIED').length;
+            const offline = valid.filter(d => getLockerCategory(d) === 'OFFLINE').length;
+
+            const setVal = (id, v) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = String(v);
+            };
+            setVal('stat-vacant-lockers', vacant);
+            setVal('stat-occupied-lockers', occupied);
+            setVal('stat-offline-lockers', offline);
+
+            const releaseAllBtn = document.getElementById('release-all-btn');
+            if (releaseAllBtn) {
+                const anyOccupied = valid.filter(d => (getDetails(d).locker_state === 'occupied')).length;
+                releaseAllBtn.disabled = (occupied === 0 && anyOccupied === 0);
+            }
+        }
+
+        function setStatusFilter(filter) {
+            statusFilter = filter;
+            document.querySelectorAll('.filter-pill').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-filter') === filter);
+            });
+            renderAllLockers();
+        }
+
+        function clearSearch() {
+            const input = document.getElementById('locker-search-input');
+            if (input) {
+                input.value = '';
+                renderAllLockers();
+            }
+        }
+
+        function matchesFilter(d) {
+            const cat = getLockerCategory(d);
+            if (statusFilter !== 'ALL' && cat !== statusFilter) return false;
+
+            const query = (document.getElementById('locker-search-input')?.value || '').toLowerCase().trim();
+            if (!query) return true;
+
+            const det = getDetails(d);
+            const idStr = String(d.device_id);
+            const paddedId = idStr.padStart(2, '0');
+            const name = (det.custom_name || det.name || `Locker ${d.device_id}`).toLowerCase();
+            const cardUid = (det.assigned_card_uid || '').toLowerCase();
+            return name.includes(query) || idStr.includes(query) || paddedId.includes(query) || cardUid.includes(query);
+        }
+
+        function buildCardHTML(d) {
+            const id = d.device_id;
+            const det = getDetails(d);
+            const cat = getLockerCategory(d);
+            const displayName = det.custom_name || det.name || `Locker ${id}`;
+            const cardUid = det.assigned_card_uid ? String(det.assigned_card_uid).toUpperCase() : '--';
+            const doorClosed = det.is_door_closed ?? true;
+
+            let badgeHTML = '';
+            let bodyInfoHTML = '';
+            let actionHTML = '';
+
+            if (cat === 'VACANT') {
+                badgeHTML = `<span class="badge badge-vacant"><span class="status-dot"></span>VACANT</span>`;
+                bodyInfoHTML = `
+                    <div class="info-box vacant">
+                        <div class="info-row">
+                            <span class="info-key">Status</span>
+                            <span class="info-val" style="color: var(--green-text);">Free / Ready</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-key">Door Contact</span>
+                            <span class="info-val">${doorClosed ? 'Closed' : 'Open / Ajar'}</span>
+                        </div>
+                    </div>`;
+                actionHTML = `
+                    <div class="card-actions">
+                        <div class="card-actions-row">
+                            <button type="button" class="secondary-btn" onclick="unlockVacantLocker(${id})" title="Trigger bolt pulse without changing vacant state">
+                                <span>🔓 Unlock</span>
+                            </button>
+                            <button type="button" class="secondary-btn" onclick="locateLocker(${id})" title="Play short buzzer & LED signal to locate physical locker">
+                                <span>🔔 Beep / Locate</span>
+                            </button>
+                        </div>
+                    </div>`;
+            } else if (cat === 'OCCUPIED') {
+                badgeHTML = `<span class="badge badge-occupied"><span class="status-dot"></span>OCCUPIED</span>`;
+                bodyInfoHTML = `
+                    <div class="info-box occupied">
+                        <div class="info-row">
+                            <span class="info-key">Card UID</span>
+                            <span class="info-val" title="${escapeHtml(cardUid)}">${escapeHtml(cardUid)}</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-key">Occupied Since</span>
+                            <span class="info-val">${escapeHtml(formatOccupationTime(det.occupied_at))}</span>
+                        </div>
+                    </div>`;
+                actionHTML = `
+                    <div class="card-actions">
+                        <button type="button" class="release-btn" onclick="forceRelease(${id})">
+                            Force Release / Unlock
+                        </button>
+                        <button type="button" class="secondary-btn" onclick="locateLocker(${id})" title="Play short buzzer & LED signal to locate physical locker">
+                            <span>🔔 Beep / Locate</span>
+                        </button>
+                    </div>`;
+            } else {
+                badgeHTML = `<span class="badge badge-offline"><span class="status-dot"></span>OFFLINE</span>`;
+                bodyInfoHTML = `
+                    <div class="info-box offline">
+                        <div class="info-row">
+                            <span class="info-key">Bus State</span>
+                            <span class="info-val">Unreachable</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-key">Last State</span>
+                            <span class="info-val">${det.locker_state === 'occupied' ? 'Occupied (' + escapeHtml(cardUid) + ')' : 'Vacant'}</span>
+                        </div>
+                    </div>`;
+            }
+
+            return `
+                <div class="card-header">
+                    <div class="card-title-group">
+                        <span class="node-badge">#${String(id).padStart(2, '0')}</span>
+                        <h3 class="locker-name" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</h3>
+                        <button type="button" class="rename-btn" onclick="startRename(${id})" title="Rename locker" aria-label="Rename Locker #${id}">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.768-6.768a2 2 0 112.828 2.828L11.828 15.83a4 4 0 01-1.414.943L6 18l1.227-4.414A4 4 0 018 12.757z"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    ${badgeHTML}
+                </div>
+                <div class="card-body">
+                    ${bodyInfoHTML}
+                    ${actionHTML}
+                </div>
+            `;
+        }
+
+        function renderAllLockers() {
+            updateSummaryCounters();
+            const grid = document.getElementById('locker-grid');
+            const empty = document.getElementById('locker-empty-state');
+            if (!grid || editingNameId !== null) return;
+
+            const valid = devices
+                .filter(d => !isTransientNode(d.device_id))
+                .sort((a, b) => a.device_id - b.device_id);
+            const filtered = valid.filter(matchesFilter);
+
+            if (filtered.length === 0) {
+                grid.innerHTML = '';
+                if (empty) empty.classList.remove('hidden');
+                return;
+            }
+            if (empty) empty.classList.add('hidden');
+
+            grid.innerHTML = '';
+            filtered.forEach(d => {
+                const cat = getLockerCategory(d).toLowerCase();
+                const card = document.createElement('div');
+                card.className = `locker-card state-${cat}`;
+                card.setAttribute('data-id', d.device_id);
+                card.innerHTML = buildCardHTML(d);
+                grid.appendChild(card);
+            });
+        }
+
+        function startRename(id) {
+            const card = document.querySelector(`.locker-card[data-id="${id}"]`);
+            const heading = card && card.querySelector('.locker-name');
+            if (!heading || editingNameId === id) return;
+            const current = heading.textContent;
+            editingNameId = id;
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = current;
+            input.maxLength = 64;
+            input.className = 'rename-input';
+            input.setAttribute('aria-label', `Name of Locker #${id}`);
+
+            let finished = false;
+            const finish = async (save) => {
+                if (finished) return;
+                finished = true;
+                const next = input.value.trim();
+                editingNameId = null;
+                if (save && next && next !== current) {
+                    try {
+                        const res = await API.patch(`/api/v1/devices/${id}/name`, { name: next });
+                        const dev = devices.find(x => x.device_id === id);
+                        if (dev) {
+                            dev.name = res.name;
+                            dev.custom_name = res.name;
+                            if (dev.details) {
+                                dev.details.name = res.name;
+                                dev.details.custom_name = res.name;
+                            }
+                        }
+                        showToast(`Renamed to ${res.name}`, 'success');
+                    } catch (e) {
+                        showToast(e.message || 'Rename failed', 'error');
+                    }
+                }
+                renderAllLockers();
+            };
+
+            input.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+                else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+            });
+            input.addEventListener('blur', () => finish(false));
+            heading.replaceWith(input);
+            input.focus();
+            input.select();
+        }
+
+        async function forceRelease(id) {
+            const dev = devices.find(x => x.device_id === id);
+            const det = dev ? getDetails(dev) : {};
+            const label = det.custom_name || det.name || `Locker ${id}`;
+            if (!confirm(`Force release ${label}? This clears the assigned card and unlocks the locker.`)) return;
+            try {
+                await API.post(`/api/v1/devices/${id}/release`);
+                showToast(`${label} released and unlocked`, 'success');
+                await fetchDevices();
+            } catch (e) {
+                showToast(e.message || 'Release failed', 'error');
+            }
+        }
+
+        async function unlockVacantLocker(id) {
+            const dev = devices.find(x => x.device_id === id);
+            const det = dev ? getDetails(dev) : {};
+            const label = det.custom_name || det.name || `Locker ${id}`;
+            try {
+                await API.post(`/api/v1/devices/${id}/open`);
+                showToast(`Unlocked ${label} (pulse sent)`, 'success');
+            } catch (e) {
+                showToast(e.message || `Failed to unlock ${label}`, 'error');
+            }
+        }
+
+        async function locateLocker(id) {
+            const dev = devices.find(x => x.device_id === id);
+            const det = dev ? getDetails(dev) : {};
+            const label = det.custom_name || det.name || `Locker ${id}`;
+            try {
+                await Promise.all([
+                    API.post(`/api/v1/devices/${id}/buzzer`, { sound: 1, repeat: 2 }),
+                    API.post(`/api/v1/devices/${id}/led`, { mode: 3, period10ms: 25, duty: 50, ttl: 3 }).catch(() => {})
+                ]);
+                showToast(`Locating ${label} (buzzer & LED active)`, 'info');
+            } catch (e) {
+                showToast(e.message || `Failed to signal ${label}`, 'error');
+            }
+        }
+
+        async function releaseAllLockers() {
+            const valid = devices.filter(d => !isTransientNode(d.device_id));
+            const occupiedCount = valid.filter(d => getDetails(d).locker_state === 'occupied').length;
+            if (occupiedCount === 0) return;
+            if (!confirm(`Release all ${occupiedCount} occupied locker(s)? Every occupied locker will be unlocked and its member card assignment cleared.`)) {
+                return;
+            }
+            try {
+                const res = await API.post('/api/v1/devices/release-all');
+                const count = res.released_count ?? 0;
+                showToast(`Released ${count} locker(s)`, 'success');
+                await fetchDevices();
+            } catch (e) {
+                showToast(e.message || 'Failed to release all lockers', 'error');
+            }
+        }
+
+        async function fetchDevices() {
+            try {
+                const list = await API.get('/api/v1/devices');
+                if (Array.isArray(list)) {
+                    devices = list.filter(d => !isTransientNode(d.device_id));
+                    renderAllLockers();
+                }
+            } catch (e) {}
+        }
+
+        function setupSSE() {
+            if (window.gymEventSource) {
+                window.gymEventSource.close();
+            }
+            const pill = document.getElementById('sse-status');
+            const label = document.getElementById('sse-status-label');
+            const es = new EventSource('/api/v1/stream');
+            window.gymEventSource = es;
+
+            es.onopen = () => {
+                if (pill) pill.classList.remove('disconnected');
+                if (label) label.textContent = 'STREAM: LIVE';
+            };
+
+            es.addEventListener('device_update', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (isTransientNode(data.device_id)) {
+                        devices = devices.filter(d => d.device_id !== data.device_id);
+                        renderAllLockers();
+                        return;
+                    }
+                    const online = isDeviceOnline(data);
+                    data.online = online;
+                    data.is_online = online;
+                    const idx = devices.findIndex(d => d.device_id === data.device_id);
+                    if (idx !== -1) devices[idx] = data;
+                    else devices.push(data);
+                    renderAllLockers();
+                } catch (err) {}
+            });
+
+            es.addEventListener('device_removed', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    devices = devices.filter(d => d.device_id !== data.device_id);
+                    renderAllLockers();
+                } catch (err) {}
+            });
+
+            es.addEventListener('locker_mode_update', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data && data.mode) applyModeUI(data.mode);
+                } catch (err) {}
+            });
+
+            es.onerror = () => {
+                if (pill) pill.classList.add('disconnected');
+                if (label) label.textContent = 'STREAM: RECONNECTING';
+                es.close();
+                setTimeout(setupSSE, 3000);
+            };
+        }
+
+        // Refresh occupation duration labels every 30s
+        setInterval(() => {
+            if (editingNameId === null) renderAllLockers();
+        }, 30000);
+
+        fetchLockerMode();
+        fetchDevices();
+        setupSSE();
+    </script>
+</body>
+</html>
