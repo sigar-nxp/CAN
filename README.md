@@ -20,16 +20,22 @@ The Gateway acts as the central bridge between IP networks and the low-level CAN
 |                  PS Locks OIP Gateway (Raspberry Pi)                    |
 |                                                                         |
 |  +───────────────────────+   +───────────────────────────────────────+  |
-|  |  FastAPI REST API     |   |  Responsive Web Dashboard (Live UI)   |  |
-|  |  (Swagger UI @ /docs) |   |  (Locker Tiles, Provisioning Banner)  |  |
+|  |  FastAPI REST API     |   |  Responsive Web Dashboards (Live SSE) |  |
+|  |  (Swagger UI @ /docs) |   |  • Gym Reception UI (/gym)            |  |
+|  |                       |   |  • Technical Console (/)              |  |
 |  +───────────────────────+   +───────────────────────────────────────+  |
+|                                   │                                     |
+|  +───────────────────────────────────────────────────────────────────+  |
+|  |  Domain Services (GymLockerService, GymProvisioner, Lock/OTA)     |  |
+|  +───────────────────────────────────────────────────────────────────+  |
 |                                   │                                     |
 |  +───────────────────────────────────────────────────────────────────+  |
 |  |  Background Workers (CANListener, Beacon, Asynchronous Log Worker)|  |
 |  +───────────────────────────────────────────────────────────────────+  |
 |                                   │                                     |
 |  +───────────────────────────────────────────────────────────────────+  |
-|  |  Storage Engine (SQLite: Device Config, Custom Names, Audit Logs) |  |
+|  |  Storage Engine (SQLite: Device Config, Gym Occupancy, System     |  |
+|  |                  Settings, Custom Names, Audit Logs)              |  |
 |  +───────────────────────────────────────────────────────────────────+  |
 |                                   │                                     |
 |  +───────────────────────────────────────────────────────────────────+  |
@@ -39,11 +45,13 @@ The Gateway acts as the central bridge between IP networks and the low-level CAN
                                     │ CAN 2.0A (11-Bit) @ 50 kbit/s
                                     ▼
 +─────────────────────────────────────────────────────────────────────────+
-|               PS Locks CAN Bus (Lock Nodes 1..126)                      |
+|  PS Locks CAN Bus (Lock Nodes 1..126; Gym Mode: Staging 1, Lockers 2..49)|
 +─────────────────────────────────────────────────────────────────────────+
 ```
 
 ### Key Capabilities
+- **Offline Fitness Gym Mode & Reception UI (`/gym`)**: Autonomous gateway-side free locker selection (`STATUS 0x11` -> `AUTH_RESP 0x60`) enforcing a strict **1 card = max 1 locker** policy without internet/cloud connectivity, paired with a dedicated, zero-CDN **Gym Reception UI (`/gym`)** featuring live Vacant/Occupied/Offline counters, search/status filters, inline locker renaming, vacant unlock (`OPEN_HOLD`), acoustic/optical locate signals, single force-release, and bulk `Release All`.
+- **Zero-Touch Gym Auto-Provisioning & Transient Node Filtering**: Factory-tested locks ship with staging **Node 1** and are automatically factory-reset (`0xFB`) and provisioned to the lowest free locker ID in **2..49** (48 lockers per Raspberry Pi) with hardware UID deduplication preserving custom names. Transient addresses (**Node 1** in Gym Mode and **Node 127 / `0x7F`** unprovisioned discovery) are strictly excluded from SQLite persistence, REST endpoints, SSE streams, and UI counters so no ghost offline cards ever appear.
 - **Automatic Discovery & Commissioning**: Real-time identification of unassigned locks (`0x7F`) by UID with single-click/single-call ID provisioning and UID deduplication.
 - **Heartbeat & Offline Timeout Detection**: Continuous tracking of per-device `last_seen` timestamps with automatic transitions to `OFFLINE` status when locks cease telemetry, keeping active counts accurate.
 - **Node Deletion & Bulk Offline Pruning**: Immediate deletion of individual locks (`DELETE /devices/{id}`) and one-click bulk cleanup of offline locks (`DELETE /devices/prune-offline`) with instant real-time SSE card removal.
@@ -51,7 +59,7 @@ The Gateway acts as the central bridge between IP networks and the low-level CAN
 - **Whitelist Management**: Slot-based RFID access management (Slot 1 Ephemeral, Slots 2..N Persistent) with custom validity (TTL in days) and local policy overrides.
 - **Door Close Guard**: Active security monitoring that triggers local optical/acoustic alarms and safe releases if doors remain open.
 - **Full Telemetry & Diagnostics**: Real-time sensing of door position, bolt state, battery/supply voltage (VCC), temperature, error counters, and bus-off recovery metrics.
-- **Data Persistence & Custom Aliases**: Non-volatile storage of device configuration, operational modes, and user-assigned names (e.g., "Locker 12") via SQLite.
+- **Data Persistence & Custom Aliases**: Non-volatile SQLite storage of device configuration, locker occupancy (`locker_state`, `assigned_card_uid`, `occupied_at`), global operation mode (`system_settings.locker_operation_mode`), and user-assigned names (`custom_name`, e.g., `"Spind 01"`).
 - **Asynchronous Audit Logging**: Non-blocking database tracking of access decisions, card scans, state changes, and hardware errors with real-time SSE event dispatching.
 - **CAN Specification v0.4r5 Alignment**: Standardized on unified OTA base ID `0x780 | devId` with MSB opcode direction signaling.  
 
@@ -162,8 +170,11 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 ### Accessing Interfaces
 
-* **Web Dashboard (Commissioning & Testing)**: `http://<ip-or-hostname>:8000/`
+* **Gym Reception UI (Fitness Studio Staff Dashboard)**: `http://<ip-or-hostname>:8000/gym`
+* **Technical Web Console (Commissioning, Diagnostics & OTA)**: `http://<ip-or-hostname>:8000/`
 * **Interactive OpenAPI Documentation (REST Integration)**: `http://<ip-or-hostname>:8000/docs`
+
+> **Persistent Global Operation Mode Switcher (`gym` vs `standard`)**: Both the `/gym` Reception UI and the `/` Technical Console include a live header mode switcher backed by `GET`/`PUT /api/v1/system/locker-mode`. The selected mode (`gym` by default) is persisted in the SQLite `system_settings` table (`locker_operation_mode`) across gateway and Raspberry Pi restarts, and mode transitions are broadcast in real time via SSE (`locker_mode_update`).
 
 ### Production Deployment (Systemd Services)
 
@@ -858,27 +869,56 @@ Returns authoritative global batch progress across all queued devices.
 
 ### 5.11 Offline Fitness Gym Mode (Free Locker Selection)
 
-`LOCKER_OPERATION_MODE` selects the behaviour: `gym` (default) or `standard`. Read it with `GET /api/v1/system/locker-mode`; switch it at runtime (memory only, not persisted) with `PUT /api/v1/system/locker-mode` and body `{"mode": "standard"}`. Set the environment variable for a permanent default.
+#### 1. Persistent Operation Mode (`gym` vs `standard`)
 
-**Card logic (gym mode).** A lock that does not know a card asks the gateway (`STATUS 0x11`). The gateway answers with the existing `AUTH_RESP` (`0x60`):
+The gateway's global locker operation mode defaults to `gym` (overridable on first boot via the `LOCKER_OPERATION_MODE` environment variable) and is persisted in the SQLite `system_settings` table under the key `locker_operation_mode` so the active mode survives service restarts and Raspberry Pi reboots.
 
-| Locker | Card | Answer | Result |
+- **Query Active Mode**: `GET /api/v1/system/locker-mode` returns the active mode (`"gym"` or `"standard"`), `available_modes`, `staging_node_id` (`1`), and `node_id_range` (`[2, 49]`).
+- **Switch Mode at Runtime**: `PUT /api/v1/system/locker-mode` with body `{"mode": "gym"}` or `{"mode": "standard"}` updates the active mode in memory, persists it to SQLite (`system_settings`), purges any staging Node 1 entry when entering `gym` mode, and broadcasts an SSE `locker_mode_update` event to all open Web UIs.
+- **Web UI Header Switcher**: Staff and technicians can toggle between **Gym Mode** and **Standard Mode** directly from the top navigation bar on both `/gym` and `/`.
+
+#### 2. Card Authorization Logic (`services/gym_service.py`)
+
+When a lock detects an RFID card not currently in its local whitelist, it emits `STATUS 0x11` (`RFID_AUTH_REQ`). In `gym` mode, `GymLockerService` evaluates the request against SQLite occupancy state and responds via `AUTH_RESP` (`0x60`):
+
+| Locker State | Presented Card | Gateway `AUTH_RESP` | Outcome & State Transition |
 |---|---|---|---|
-| VACANT | holds no other locker | `ALLOW / CLOSE` | OCCUPIED, card and time stored |
-| VACANT | already holds another locker | `DENY` | unchanged (1 card = max 1 locker) |
-| OCCUPIED | owner card | `ALLOW / OPEN` | VACANT |
-| OCCUPIED | any other card | `DENY` | stays locked |
+| `VACANT` | Holds no other locker | `ALLOW / CLOSE` (`result=1, action=1`) | Becomes `OCCUPIED`; `assigned_card_uid` and UTC `occupied_at` persisted |
+| `VACANT` | Already occupies another locker | `DENY / NONE` (`result=0, action=0`) | Remains `VACANT` (**1 card = max 1 locker** enforced across the bus) |
+| `OCCUPIED` | Matching owner card | `ALLOW / OPEN` (`result=1, action=2`) | Becomes `VACANT`; `assigned_card_uid` and `occupied_at` cleared |
+| `OCCUPIED` | Any other card | `DENY / NONE` (`result=0, action=0`) | Remains `OCCUPIED`; lock plays reject tone and blinks red LED |
 
-After a claim the firmware stores the owner in ephemeral Slot 1 and answers the owner's next swipe locally (`STATUS 0x10`, `OPEN_OK`). The gateway mirrors that, and the firmware's own guest-credential auto-delete, so the database never shows a released locker as occupied.
+After a locker is claimed, the lock firmware stores the owner UID in ephemeral **Slot 1** and answers the owner's subsequent unlock swipe locally (`STATUS 0x10`, `OPEN_OK`). `GymLockerService` mirrors both local `OPEN_OK` events and firmware guest-credential auto-deletions into SQLite so the database never shows a released locker as occupied.
 
-**Auto-provisioning.** Factory-tested locks ship with Device ID 1, so Node 1 is reserved as the staging ID. The firmware only accepts `ASSIGN_ID` while unprovisioned, so a lock seen on node 1 is sent `FACTORY_RESET` (`0xFB`). It reboots as `0x7F`, announces itself on `0x57F`, and receives the lowest free ID in 2..49 (48 lockers per Pi) through the normal UID assignment. A lock whose hardware UID is already registered keeps its old ID. Connect only one new lock to the bus at a time, because two nodes on ID 1 corrupt each other's frames.
+#### 3. Auto-Provisioning & Transient Node Handling (`services/gym_provisioning.py`)
+
+- **Staging Node 1 Auto-Reassignment (IDs `2..49`)**: Factory-tested locks leave EOL testing with **Device ID 1** stored in flash, so Node 1 is reserved exclusively as a transient staging/onboarding address in `gym` mode. Because firmware only accepts `ASSIGN_ID` while unprovisioned (`0x7F`), any telemetry arriving from Node 1 triggers `GymProvisioner` to send `FACTORY_RESET` (`0xFB`) to Node 1. The lock reboots as `0x7F`, emits `0x57F ID_REQUEST`, and is automatically assigned the lowest free locker ID in **2..49** (supporting 48 lockers per Raspberry Pi) at 50 kbit/s (`BITRATE_50K`). If the lock's full hardware UID is already registered in SQLite, it reclaims its previous node ID and custom name while resetting any stale occupancy claim. *(Connect only one new staging lock on ID 1 at a time to avoid CAN arbitration collisions.)*
+- **Transient Node Filtering (No Ghost Cards)**: Both **Node 1** (in `gym` mode) and **Node 127 (`0x7F`)** (unprovisioned discovery address) are treated as transient protocol addresses. They are never persisted as locker rows in SQLite, are excluded from `GET /api/v1/devices` (and return `404` on `GET /api/v1/devices/{id}`), emit `device_removed` SSE cleanup events after provisioning, and are ignored by UI summary counters so no offline ghost cards ever appear on `/gym` or `/`.
+
+#### 4. Dedicated `/gym` Reception UI (`templates/gym.html`)
+
+Served at `GET /gym`, the standalone reception dashboard is self-contained (zero external CDN dependencies for full offline operation) and purpose-built for fitness studio staff:
+
+- **Live Summary Counters**: Real-time tabular counters for **Vacant / Frei**, **Occupied / Belegt**, and **Offline** lockers, automatically excluding transient nodes (`1` and `127`).
+- **Search & Status Filters**: Instant text filtering by locker name, `#ID` (e.g., `#02`), or assigned card UID, combined with one-click filter pills (`All Lockers`, `Vacant / Frei`, `Occupied / Belegt`, `Offline`).
+- **Inline Locker Renaming**: Click the pencil icon on any card header to edit `custom_name` inline (`Enter` to save via `PATCH /api/v1/devices/{id}/name`, `Escape` to cancel).
+- **Vacant Locker Controls**:
+  - **Unlock (`🔓 Unlock`)**: Calls `POST /api/v1/devices/{id}/open_hold` (`OPEN_HOLD`, `0x04`) so a vacant locker whose door was pushed shut is held open without altering its `vacant` status.
+  - **Beep / Locate (`🔔 Beep / Locate`)**: Triggers a short acoustic chirp (`POST /api/v1/devices/{id}/buzzer`, `sound=1, repeat=2`) and green LED blink (`POST /api/v1/devices/{id}/led`, `mode=3, ttl=3`) to physically identify the locker in the changing room.
+- **Occupied Locker Controls**: Displays the assigned card UID and occupation timestamp/duration (auto-refreshed every 30s), a **Beep / Locate** button, and a **Force Release / Unlock** button (`POST /api/v1/devices/{id}/release`).
+- **Bulk `Release All`**: Toolbar button (`POST /api/v1/devices/release-all`) that force-releases and unlocks all currently occupied lockers in one confirmation step (e.g., at studio closing time).
+
+#### 5. Gym Mode REST API Endpoints
 
 | Endpoint | Description |
 |---|---|
-| `PATCH /api/v1/devices/{id}/name` (alias `POST /api/v1/devices/{id}/rename`) | Body `{"name": "Spind 01"}`; 1-64 characters, no control characters. Returns 422 for invalid names and 404 for unknown devices. |
-| `POST /api/v1/devices/{id}/release` | Admin override. Clears Slot 1 (`0x3D`), holds the bolt open (`0x04`) and marks the locker vacant. Returns 503 if the CAN commands fail. In `standard` mode it keeps its historical meaning (alias of `/reset`). |
+| `GET /api/v1/system/locker-mode` | Returns active `mode` (`"gym"` or `"standard"`), `available_modes`, `staging_node_id` (`1`), and `node_id_range` (`[2, 49]`). |
+| `PUT /api/v1/system/locker-mode` | Body `{"mode": "gym" \| "standard"}`. Switches and persists `locker_operation_mode` in SQLite `system_settings`, purges Node 1 when switching to `gym`, and broadcasts SSE `locker_mode_update`. Returns `422` for invalid modes. |
+| `PATCH /api/v1/devices/{id}/name` (alias `POST /api/v1/devices/{id}/rename`) | Body `{"name": "Spind 01"}`; 1–64 characters, no control characters. Updates `custom_name` and `name` in SQLite and broadcasts SSE `device_update`. Returns `422` for invalid names and `404` for unknown devices. |
+| `POST /api/v1/devices/{id}/release` | Admin override for a single locker. Deletes ephemeral Slot 1 (`DELETE_WL_SLOT`, `0x3D`), holds the bolt open (`OPEN_HOLD`, `0x04`), clears `assigned_card_uid`/`occupied_at`, marks the locker `vacant`, and broadcasts SSE `device_update`. Returns `503` if CAN transmission fails. In `standard` mode it preserves its legacy meaning (alias of `/reset`). |
+| `POST /api/v1/devices/release-all` (alias `POST /api/v1/locks/release-all`) | Bulk reception override. Iterates over all currently occupied lockers (excluding transient IDs `1` and `127`), executes `force_release` (`DELETE_WL_SLOT` + `OPEN_HOLD`) on each, clears occupancy in SQLite, broadcasts SSE updates, and returns `{"status": "released_all", "released_count": N, "released_device_ids": [...], "released_lockers": [...], "failed_device_ids": []}`. |
 
-Device payloads (`GET /devices`, SSE `device_update`) carry `custom_name`, `locker_state`, `assigned_card_uid` and `occupied_at` (UTC, ISO-8601 with `Z`). Existing databases are migrated automatically on startup.
+Device payloads (`GET /api/v1/devices`, `GET /api/v1/devices/{id}`, and SSE `device_update`) include `custom_name`, `locker_state` (`"vacant"` or `"occupied"`), `assigned_card_uid`, and `occupied_at` (UTC ISO-8601 timestamp with `Z`). Existing SQLite databases are migrated automatically and idempotently on startup via `ensure_db_schema()`.
 
 ## 6. CAN Protocol Reference (Standard 11-Bit)
 
@@ -1089,16 +1129,33 @@ The PS Locks Open Integration Platform implements a tiered validation strategy s
 
 ---
 
-### 8.1 Unit & Regression Tests
+### 8.1 Unit & Regression Tests (`tests/conftest.py` & `tests/test_gym_locker_mode.py`)
 
-The unit test suite validates protocol parsing, CAN frame builders, command serialization/deserialization, and API route handling using mock SocketCAN interfaces without requiring physical hardware:
+The unit and regression test suite validates protocol parsing, CAN frame builders, command serialization/deserialization, Offline Fitness Gym Mode workflows, and FastAPI route contracts without requiring physical hardware:
 
 ```bash
 # Execute standard hardware-independent test suite
-pytest tests/ -v
+.venv/bin/pytest tests/ -v
+
+# Execute completely isolated in-process (even if a live Gateway daemon is running on :8000)
+OIP_API_URL=http://127.0.0.1:9 .venv/bin/pytest tests/ -v
 ```
 
-Tests run in milliseconds and verify:
+#### Test Isolation Architecture (`tests/conftest.py`)
+`tests/conftest.py` runs before any application module is imported and enforces three safety invariants so running `pytest` on a production Raspberry Pi or development host never disturbs live state:
+1. **Isolated Temporary SQLite Database**: Unless `DATABASE_URL` is explicitly set in the environment, `conftest.py` creates an ephemeral temporary directory (`pslocks_tests_*`) with a dedicated `pslocks_test.db` file and registers an `atexit` cleanup hook. Tests that wipe or migrate tables never touch the gateway's live `pslocks.db`.
+2. **SocketCAN Simulation Guard (`CAN_SIMULATION=1`)**: Prevents test processes from opening or transmitting frames onto the physical `can0` interface.
+3. **Deterministic Default Operation Mode (`LOCKER_OPERATION_MODE=standard`)**: Legacy unit tests use Node 1 as a regular operational lock, so the suite starts in `standard` mode by default while `tests/test_gym_locker_mode.py` explicitly switches to and tests `gym` mode.
+
+#### Gym Locker Mode Regression Suite (`tests/test_gym_locker_mode.py`)
+`tests/test_gym_locker_mode.py` provides comprehensive unit and integration coverage for the Offline Fitness Gym Mode implementation across 5 test classes:
+- **`TestFreeLockerSelection`**: Verifies default `vacant` state and `Locker <id>` naming, free-card claim (`ALLOW / CLOSE`), owner-card release (`ALLOW / OPEN`), non-owner denial (`DENY`), strict **1 card = max 1 locker** enforcement (including concurrent multi-threaded swipes via `threading.Barrier`), UID normalization (4-byte vs 7-byte non-prefix matching), and automatic state rollback if CAN transmission fails.
+- **`TestHardwareEventSync`**: Verifies that lock-side local whitelist opens (`STATUS 0x10`, `OPEN_OK`), firmware guest-credential auto-deletions, and multi-frame 7-byte UID sequences (`0x11`/`0x14` and `0x10`/`0x13`) are accurately mirrored into SQLite and broadcast via SSE.
+- **`TestAutoProvisioning`**: Validates staging **Node 1** detection, `FACTORY_RESET` (`0xFB`) execution, automatic assignment to the lowest free ID in `2..49`, hardware UID deduplication preserving custom locker names (`custom_name`), and regression guards ensuring transient nodes (**Node 1** and **Node 127 / `0x7F`**) never leave records in SQLite, `can_listener.devices`, or `GET /api/v1/devices`.
+- **`TestGymRestApi`**: Exercises `PATCH /api/v1/devices/{id}/name` (`POST .../rename`), single-locker admin override (`POST /api/v1/devices/{id}/release`), bulk release (`POST /api/v1/devices/release-all`), persistent mode toggling (`GET`/`PUT /api/v1/system/locker-mode`) across SQLite reloads, and standalone HTML rendering of `GET /gym` and `GET /`.
+- **`TestSettingsAndMigration`**: Validates `LOCKER_OPERATION_MODE` parsing/fallbacks and idempotent schema migration (`ensure_db_schema()`) of legacy SQLite databases.
+
+General unit tests also run in milliseconds and verify:
 - CRC32 calculation and byte-level packing across all CAN opcodes.
 - Parser handling of basic telemetry (`0x200`), version info, and error codes (`0x300`).
 - FastAPI route contracts, schema validations, and mock responses.

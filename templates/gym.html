@@ -931,7 +931,7 @@
                 actionHTML = `
                     <div class="card-actions">
                         <div class="card-actions-row">
-                            <button type="button" class="secondary-btn" onclick="unlockVacantLocker(${id})" title="Trigger bolt pulse without changing vacant state">
+                            <button type="button" class="secondary-btn" onclick="unlockVacantLocker(${id})" title="Hold bolt open (OPEN_HOLD) without changing vacant state">
                                 <span>🔓 Unlock</span>
                             </button>
                             <button type="button" class="secondary-btn" onclick="locateLocker(${id})" title="Play short buzzer & LED signal to locate physical locker">
@@ -1094,8 +1094,8 @@
             const det = dev ? getDetails(dev) : {};
             const label = det.custom_name || det.name || `Locker ${id}`;
             try {
-                await API.post(`/api/v1/devices/${id}/open`);
-                showToast(`Unlocked ${label} (pulse sent)`, 'success');
+                await API.post(`/api/v1/devices/${id}/open_hold`);
+                showToast(`Unlocked ${label} (held open)`, 'success');
             } catch (e) {
                 showToast(e.message || `Failed to unlock ${label}`, 'error');
             }
