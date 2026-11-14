@@ -692,12 +692,28 @@ class TestAutoProvisioning(GymTestBase):
         self.assertIsNone(self.db_row(127))
 
         with patch.object(can_listener, "running", True):
+            # 0. Outbound/echoed master broadcast frames (e.g. 0x47F Master Beacon 0xB0)
+            # must be ignored and never logged as UNPROVISIONED_FRAME on node 127.
+            can_listener.handle_frame(CANFrame(0x47F, bytes([0xB0, 1, 0, 0, 0, 0, 0, 0])))
+
             # 1. Simulate unassigned announcement (0x57F ID_REQUEST) from node 127 (0x7F)
             can_listener.handle_frame(CANFrame(0x57F, bytes([0x28, 0x11, 0x22, 0x33, 0x44])))
 
             # 2. Simulate in-flight status or health telemetry from node 127 (0x7F)
             can_listener.handle_frame(CANFrame(CAN_STATUS | 0x7F, bytes([0x01, 1, 1, 0, 0, 0, 0, 0])))
             can_listener.handle_frame(CANFrame(CAN_HEALTH | 0x7F, bytes([0x00, 0x0C, 0x80, 0x19, 0, 0, 0, 0])))
+
+        # Confirm 0x47F master broadcast did not produce an UNPROVISIONED_FRAME log,
+        # while non-master unprovisioned frames on 0x7F still log UNPROVISIONED_FRAME.
+        with SessionLocal() as db:
+            unprov_logs = (
+                db.query(EventLog)
+                .filter(EventLog.event_type == "UNPROVISIONED_FRAME")
+                .all()
+            )
+            unprov_can_ids = {log.can_id for log in unprov_logs}
+            self.assertNotIn("0x47F", unprov_can_ids)
+            self.assertIn(f"0x{CAN_STATUS | 0x7F:03X}", unprov_can_ids)
 
         # Verify that node 127 was NOT created in DB or listener devices
         self.assertNotIn(127, can_listener.devices)
@@ -895,8 +911,8 @@ class TestGymRestApi(GymTestBase):
         self.assertIn("text/html", resp.headers.get("content-type", ""))
         html = resp.text
         self.assertIn("PS LOCKS", html)
-        self.assertIn("Vacant / Frei", html)
-        self.assertIn("Occupied / Belegt", html)
+        self.assertIn("Vacant", html)
+        self.assertIn("Occupied", html)
         self.assertIn("Offline", html)
         self.assertIn("Force Release / Unlock", html)
         self.assertIn("Release All", html)

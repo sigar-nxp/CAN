@@ -14,7 +14,7 @@ import os
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
-from database.database import Base, engine, ensure_db_schema
+from database.database import ensure_db_schema
 from config import settings
 from api.device import router as devices_router
 from api.system import router as system_router

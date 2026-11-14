@@ -6,13 +6,6 @@ unassigned physical UID32 hardware address to a logical network node ID
 (0-127), and configures the hardware communication bitrate.
 """
 
-
-"""
-PS Locks OIP
-
-Provisioning Service
-"""
-
 import time
 
 from config.globals import can_service, can_listener

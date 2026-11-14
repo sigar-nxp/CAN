@@ -854,7 +854,6 @@
         const otaUpdatingDevices = new Set();
         let totalFramesCaptured = 0;
         let lockerMode = 'gym';
-        let editingNameId = null;
 
         // Telemetry stream & filter state
         let allLogs = [];
@@ -1252,15 +1251,6 @@
             return (d.details?.locker_state ?? d.locker_state) === 'occupied' ? 'occupied' : 'vacant';
         }
 
-        function formatOccupiedSince(iso) {
-            if (!iso) return '';
-            const d = new Date(iso);
-            if (isNaN(d.getTime())) return '';
-            const sameDay = d.toDateString() === new Date().toDateString();
-            const time = d.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' });
-            return sameDay ? time : `${d.toLocaleDateString([], { day: '2-digit', month: '2-digit' })} ${time}`;
-        }
-
         function isTransientNode(id) {
             return id === 127 || (lockerMode === 'gym' && id === 1);
         }
@@ -1305,7 +1295,6 @@
                 if (res && res.mode) lockerMode = res.mode;
             } catch (e) {}
             updateGymCounters();
-            devices.filter(d => !isTransientNode(d.device_id)).forEach(d => renderLockerCard(d.device_id, d.details || d, d.health || {}, isDeviceOnline(d)));
         }
 
         async function switchLockerMode(mode) {
@@ -1537,7 +1526,6 @@
                         }
                         updateGymCounters();
                         updateDeviceSummaryCounters();
-                        devices.filter(d => !isTransientNode(d.device_id)).forEach(d => renderLockerCard(d.device_id, d.details || d, d.health || {}, isDeviceOnline(d)));
                     }
                 } catch(err) {
                     console.error("Error processing locker_mode_update", err);
@@ -1600,9 +1588,6 @@
             const isLocked = details.is_locked;
             const isClosed = details.is_door_closed;
             const displayName = details.custom_name || details.name || `Lock ${id}`;
-            const isGym = lockerMode === 'gym';
-            const lockerState = details.locker_state === 'occupied' ? 'occupied' : 'vacant';
-            const isOccupied = isGym && isOnline && lockerState === 'occupied';
             const vcc = health?.health_short?.vcc_mv ? (health.health_short.vcc_mv / 1000).toFixed(2) + ' V' : '--';
             const temp = health?.health_short?.temp_c !== undefined ? health.health_short.temp_c + ' °C' : '--';
             const isUpdating = otaUpdatingDevices.has(id);
@@ -1610,15 +1595,7 @@
             const disClass = (isUpdating || !isOnline) ? 'opacity-40 cursor-not-allowed pointer-events-none' : '';
 
             let statusBadge = '';
-            if (isGym) {
-                if (!isOnline) {
-                    statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-slate-100 text-slate-500 border-slate-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>OFFLINE</span>`;
-                } else if (lockerState === 'occupied') {
-                    statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-rose-50 text-rose-800 border-rose-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>OCCUPIED</span>`;
-                } else {
-                    statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>VACANT</span>`;
-                }
-            } else if (!isOnline) {
+            if (!isOnline) {
                 statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-slate-100 text-slate-500 border-slate-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span>OFFLINE</span>`;
             } else if (isLocked) {
                 statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-rose-50 text-rose-800 border-rose-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-rose-600"></span>BOLTED</span>`;
@@ -1628,31 +1605,13 @@
                 statusBadge = `<span class="font-mono text-xs font-semibold px-2 py-0.5 rounded border bg-emerald-50 text-emerald-800 border-emerald-300 inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>UNLOCKED</span>`;
             }
 
-            let cardHeaderBorder = !isOnline ? 'border-slate-200' : (isLocked ? 'border-rose-200' : (!isClosed ? 'border-amber-200' : 'border-emerald-200'));
-            if (isGym) cardHeaderBorder = !isOnline ? 'border-slate-200' : (lockerState === 'occupied' ? 'border-rose-200' : 'border-emerald-200');
-
-            const occupancyPanel = isOccupied ? `
-                        <div class="bg-rose-50 border border-rose-200 p-2 rounded text-xs space-y-1">
-                            <div class="flex items-center justify-between">
-                                <span class="text-[10px] uppercase font-mono text-rose-400 font-semibold tracking-wider shrink-0">Member Card</span>
-                                <span class="font-mono text-xs font-bold text-rose-900 truncate ml-2" title="${escapeHtml(details.assigned_card_uid)}">${escapeHtml(String(details.assigned_card_uid || '--').toUpperCase())}</span>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-[10px] uppercase font-mono text-rose-400 font-semibold tracking-wider shrink-0">Since</span>
-                                <span class="font-mono text-xs font-bold text-rose-900">${escapeHtml(formatOccupiedSince(details.occupied_at) || '--')}</span>
-                            </div>
-                        </div>` : '';
-            const releaseButton = isOccupied ? `
-                        <button ${disAttr} onclick="forceRelease(${id})" title="Admin override: clear the member card and unlock the bolt" class="w-full bg-rose-600 hover:bg-rose-700 text-white py-1.5 px-2 rounded border border-rose-700 text-xs font-mono font-semibold transition-colors shadow-2xs ${disClass} cursor-pointer">Force Release / Unlock</button>` : '';
+            const cardHeaderBorder = !isOnline ? 'border-slate-200' : (isLocked ? 'border-rose-200' : (!isClosed ? 'border-amber-200' : 'border-emerald-200'));
 
             const innerHTML = `
                 <div class="px-4 py-3 bg-white border-b ${cardHeaderBorder} flex justify-between items-center rounded-t-lg">
                     <div class="flex items-center gap-2 min-w-0">
                         <span class="font-mono text-xs font-bold px-2 py-0.5 rounded border bg-slate-100 text-slate-800 border-slate-300 shrink-0">#${String(id).padStart(2, '0')}</span>
-                        <h3 class="locker-name text-sm font-bold text-slate-900 truncate" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</h3>
-                        <button onclick="startRename(${id})" title="Rename locker" class="text-slate-400 hover:text-slate-700 hover:bg-slate-100 p-1 rounded transition-colors cursor-pointer shrink-0" aria-label="Rename Lock #${id}">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M9 13l6.768-6.768a2 2 0 112.828 2.828L11.828 15.83a4 4 0 01-1.414.943L6 18l1.227-4.414A4 4 0 018 12.757z"></path></svg>
-                        </button>
+                        <h3 class="text-sm font-bold text-slate-900 truncate" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</h3>
                     </div>
                     <div class="shrink-0 ml-2 flex items-center gap-1.5">
                         ${statusBadge}
@@ -1687,7 +1646,6 @@
                             </div>
                         </div>
 
-                        ${occupancyPanel}
                         <div class="bg-slate-50 border border-slate-200 p-2 rounded flex items-center justify-between text-xs">
                             <span class="text-[10px] uppercase font-mono text-slate-400 font-semibold tracking-wider shrink-0">RFID Card</span>
                             <span class="font-mono text-xs font-bold text-slate-700 truncate ml-2" title="${details.last_scanned_card || 'None'}">
@@ -1698,7 +1656,6 @@
 
                     <!-- Action Buttons -->
                     <div class="space-y-2 pt-1 border-t border-slate-100">
-                        ${releaseButton}
                         <div class="grid grid-cols-3 gap-1.5">
                             <button ${disAttr} onclick="deviceAction(${id}, 'open')" class="bg-white hover:bg-slate-50 text-slate-700 py-1.5 px-2 rounded border border-slate-300 text-xs font-mono font-semibold transition-colors shadow-2xs ${disClass} cursor-pointer">Pulse</button>
                             <button ${disAttr} onclick="deviceAction(${id}, 'open_hold')" class="bg-white hover:bg-slate-50 text-slate-700 py-1.5 px-2 rounded border border-slate-300 text-xs font-mono font-semibold transition-colors shadow-2xs ${disClass} cursor-pointer">Hold</button>
@@ -1717,8 +1674,6 @@
                     ${isUpdating ? '<div class="ota-lockout-banner mt-2 bg-amber-100 text-amber-900 py-1.5 px-2 rounded text-xs font-mono font-bold text-center animate-pulse border border-amber-400">⚡ OTA Flashing Active (Controls Locked)</div>' : ''}
                 </div>
             `;
-
-            if (card && editingNameId === id) return; // keep the rename input alive across SSE refreshes
 
             if (!card) {
                 card = document.createElement('div');
@@ -1757,68 +1712,6 @@
                 } else if (!locked && banner) {
                     banner.remove();
                 }
-            }
-        }
-
-        function startRename(id) {
-            const card = document.querySelector(`[data-id="${id}"]`);
-            const heading = card && card.querySelector('.locker-name');
-            if (!heading || editingNameId === id) return;
-            const current = heading.textContent;
-            editingNameId = id;
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.value = current;
-            input.maxLength = 64;
-            input.setAttribute('aria-label', `Name of Lock #${id}`);
-            input.className = 'min-w-0 flex-1 text-sm font-bold text-slate-900 border border-sky-400 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-sky-400';
-            let finished = false;
-            const finish = async (save) => {
-                if (finished) return;
-                finished = true;
-                const next = input.value.trim();
-                editingNameId = null;
-                if (save && next && next !== current) {
-                    try {
-                        const res = await API.patch(`/api/v1/devices/${id}/name`, { name: next });
-                        applyLocalName(id, res.name);
-                        showToast(`Renamed to ${escapeHtml(res.name)}`, 'success');
-                        updateDeviceFilterOptions();
-                    } catch (e) {
-                        showToast(escapeHtml(e.message || 'Rename failed'), 'error');
-                    }
-                }
-                const dev = devices.find(d => d.device_id === id);
-                if (dev) renderLockerCard(id, dev.details || dev, dev.health || {}, isDeviceOnline(dev));
-            };
-            input.addEventListener('keydown', (ev) => {
-                if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
-                else if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
-            });
-            input.addEventListener('blur', () => finish(false));
-            heading.replaceWith(input);
-            input.focus();
-            input.select();
-        }
-
-        function applyLocalName(id, name) {
-            const dev = devices.find(d => d.device_id === id);
-            if (!dev) return;
-            dev.name = name;
-            dev.custom_name = name;
-            if (dev.details) { dev.details.name = name; dev.details.custom_name = name; }
-        }
-
-        async function forceRelease(id) {
-            const dev = devices.find(d => d.device_id === id);
-            const d = dev ? (dev.details || dev) : {};
-            const label = d.custom_name || d.name || `Lock ${id}`;
-            if (!confirm(`Force release ${label}? The member card is cleared and the bolt is unlocked.`)) return;
-            try {
-                await API.post(`/api/v1/devices/${id}/release`);
-                showToast(`${escapeHtml(label)} released`, 'success');
-            } catch (e) {
-                showToast(escapeHtml(e.message || 'Release failed'), 'error');
             }
         }
 

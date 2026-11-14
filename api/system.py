@@ -7,12 +7,10 @@ master beacon broadcast.
 """
 
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from datetime import datetime
 import platform
-import os
 
 from config import settings
 from config.globals import beacon_service, can_listener

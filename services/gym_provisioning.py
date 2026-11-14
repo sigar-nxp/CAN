@@ -38,8 +38,6 @@ logger = logging.getLogger(__name__)
 
 STAGING_LOCK_ID = 1
 ASSIGN_ATTEMPTS = 2
-# A staging node that was silent for this long after the cycle is considered gone
-STAGING_STALE_S = 3.0
 
 
 class NoFreeNodeIdError(RuntimeError):
@@ -139,7 +137,7 @@ class GymProvisioner:
             return []
         self._log("PROVISION_START", None,
                   f"Lock on staging node {settings.STAGING_NODE_ID} factory-reset for re-assignment")
-        self._drop_staging_node()
+        self._purge_transient_nodes()
 
         results: List[Dict[str, Any]] = []
         handled: set = set()
@@ -162,7 +160,7 @@ class GymProvisioner:
         if not handled:
             self._log("PROVISION_FAILED", None,
                       "Staging lock did not re-announce itself after FACTORY_RESET")
-        self._cleanup_staging_node()
+        self._purge_transient_nodes()
         return results
 
     def _provision_with_retry(self, uid_hex: str) -> Optional[Dict[str, Any]]:
@@ -207,8 +205,7 @@ class GymProvisioner:
         if old_id is not None:
             self._broadcast("device_removed", {"device_id": old_id})
         # Ensure any transient node 127 (0x7F) entry is dropped
-        self.listener.remove_device(settings.UNPROVISIONED_NODE_ID)
-        self._broadcast("device_removed", {"device_id": settings.UNPROVISIONED_NODE_ID})
+        self._purge_transient_nodes(settings.UNPROVISIONED_NODE_ID)
         self._finalize(node_id, full_uid, reused)
         self._log("DEVICE_PROVISIONED", full_uid,
                   f"Staging lock {full_uid} assigned Node {node_id}" + (" (previous ID reused)" if reused else ""),
@@ -248,8 +245,7 @@ class GymProvisioner:
             used = set(self.listener.devices.keys())
         with self.session_factory() as db:
             used.update(row[0] for row in db.query(Device.device_id).all())
-        used.discard(settings.STAGING_NODE_ID)
-        used.discard(settings.UNPROVISIONED_NODE_ID)
+        used.difference_update(settings.TRANSIENT_NODE_IDS)
         return used
 
     def _registered_id_for(self, uid_hex: str) -> Optional[int]:
@@ -297,15 +293,12 @@ class GymProvisioner:
                 dev.assigned_card_uid = None
                 dev.occupied_at = None
 
-    def _drop_staging_node(self) -> None:
-        """Removes staging node (1) and unprovisioned node (127) from memory and DB and tells dashboards."""
-        for transient_id in (settings.STAGING_NODE_ID, settings.UNPROVISIONED_NODE_ID):
+    def _purge_transient_nodes(self, *node_ids: int) -> None:
+        """Removes transient node IDs (default: staging 1 and unprovisioned 127) from memory/DB and notifies dashboards."""
+        targets = node_ids or settings.TRANSIENT_NODE_IDS
+        for transient_id in targets:
             self.listener.remove_device(transient_id)
             self._broadcast("device_removed", {"device_id": transient_id})
-
-    def _cleanup_staging_node(self) -> None:
-        """Purges staging node 1 and unprovisioned node 127 from memory and database and tells the dashboards."""
-        self._drop_staging_node()
 
     def _broadcast_device(self, device_id: int) -> None:
         with self.listener.lock:

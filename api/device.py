@@ -8,15 +8,17 @@ and configuring physical locks. This includes endpoints for basic actions
 
 
 import asyncio
+import json
 import logging
+import time
+from typing import Any, Optional
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
-import json
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
 
 from config import settings
-from config.globals import can_listener, can_service, beacon_service, gym_service
+from config.globals import can_listener, gym_service
 from services.gym_service import GymCommandError
 from services.lock_service import LockService
 from canbus.commands import wl_write_uid, wl_write_uid_part2
@@ -148,8 +150,6 @@ def assign_device(req: AssignRequest):
     dev.hardware_uid = uid_hex
     dev.mark_seen()
 
-    from database.database import SessionLocal
-    from models.device import Device
     try:
         with SessionLocal() as db:
             db_dev = db.query(Device).filter(Device.device_id == req.device_id).first()
@@ -184,10 +184,10 @@ def get_locks():
 
 @router.get("/devices")
 def get_devices():
-    devices = can_listener.devices.values()
-    devices = [d for d in devices if d.device_id != settings.UNPROVISIONED_NODE_ID]
-    if settings.is_gym_mode():
-        devices = [d for d in devices if d.device_id != settings.STAGING_NODE_ID]
+    devices = [
+        d for d in can_listener.devices.values()
+        if not settings.is_transient_node(d.device_id)
+    ]
     return [
         {
             "device_id": dev.device_id,
@@ -207,7 +207,7 @@ def get_devices():
 
 @router.get("/devices/{id}")
 def get_device(id: int):
-    if id == settings.UNPROVISIONED_NODE_ID or (settings.is_gym_mode() and id == settings.STAGING_NODE_ID):
+    if settings.is_transient_node(id):
         raise HTTPException(status_code=404, detail="Device not found")
     dev = can_listener.get_device(id)
     if not dev:
@@ -398,8 +398,6 @@ def set_mode(id: int, req: LockModeReq):
         dev.door_release_delay_s = req.door_release_delay_s
         
         # Save to DB
-        from database.database import SessionLocal
-        from models.device import Device
         with SessionLocal() as db:
             db_dev = db.query(Device).filter(Device.device_id == id).first()
             if db_dev:
@@ -504,7 +502,6 @@ def add_whitelist(id: int, req: WhitelistWriteReq):
     frame1 = wl_write_uid(id, req.slot_index, uid_len, uid_bytes, lock_id=1)
     lock_service.send(frame1)
 
-    import time
     time.sleep(0.2)
 
     # Always send part 2 to configure ttl_days and part 2 of UIDs, regardless of length

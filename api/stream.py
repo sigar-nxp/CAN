@@ -104,10 +104,11 @@ async def event_stream(request: Request):
                     break
 
             # Check devices
-            current_device_ids = set(can_listener.devices.keys())
-            current_device_ids.discard(settings.UNPROVISIONED_NODE_ID)
-            if settings.is_gym_mode():
-                current_device_ids.discard(settings.STAGING_NODE_ID)
+            current_device_ids = {
+                dev_id
+                for dev_id in can_listener.devices.keys()
+                if not settings.is_transient_node(dev_id)
+            }
 
             # Detect removed devices
             for dev_id in list(last_device_seen.keys()):
@@ -117,9 +118,7 @@ async def event_stream(request: Request):
                     yield f"event: device_removed\ndata: {json.dumps({'device_id': dev_id})}\n\n"
 
             for dev_id, dev in list(can_listener.devices.items()):
-                if dev_id == settings.UNPROVISIONED_NODE_ID:
-                    continue
-                if settings.is_gym_mode() and dev_id == settings.STAGING_NODE_ID:
+                if settings.is_transient_node(dev_id):
                     continue
                 is_online = dev.online
                 if (dev_id not in last_device_seen 

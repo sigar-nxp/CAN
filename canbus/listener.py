@@ -28,6 +28,7 @@ from .protocol import CANFrame
 from .service import CANService
 from .constants import (
     COMMAND_NAMES,
+    CAN_MASTER,
     CAN_STATUS,
     CAN_HEALTH,
     STATUS_RFID_AUTH_REQ,
@@ -482,17 +483,22 @@ class CANListener:
 
         return found
 
+    def _purge_node(self, device_id: int) -> bool:
+        """Removes a transient node from memory and database, and notifies dashboards via SSE."""
+        removed = self.remove_device(device_id)
+        try:
+            from api.stream import broadcast_sse_event
+            broadcast_sse_event("device_removed", {"device_id": device_id})
+        except Exception as e:
+            logger.debug(f"Could not broadcast removal of node {device_id}: {e}")
+        return removed
+
     def purge_staging_node(self) -> bool:
         """
         Removes the staging node (ID 1) from memory and database, and notifies dashboards via SSE.
         In Gym Mode, Node 1 is strictly a transient staging address and must never remain.
         """
-        removed = self.remove_device(STAGING_NODE_ID)
-        try:
-            from api.stream import broadcast_sse_event
-            broadcast_sse_event("device_removed", {"device_id": STAGING_NODE_ID})
-        except Exception as e:
-            logger.debug(f"Could not broadcast staging node removal: {e}")
+        removed = self._purge_node(STAGING_NODE_ID)
         self.purge_unprovisioned_node()
         return removed
 
@@ -502,13 +508,7 @@ class CANListener:
         and notifies dashboards via SSE. Node 127 is strictly a transient discovery address
         and must never remain in DB or UI.
         """
-        removed = self.remove_device(UNPROVISIONED_NODE_ID)
-        try:
-            from api.stream import broadcast_sse_event
-            broadcast_sse_event("device_removed", {"device_id": UNPROVISIONED_NODE_ID})
-        except Exception as e:
-            logger.debug(f"Could not broadcast unprovisioned node removal: {e}")
-        return removed
+        return self._purge_node(UNPROVISIONED_NODE_ID)
 
     def prune_offline_devices(self) -> list:
         """
@@ -659,9 +659,7 @@ class CANListener:
             devices = db.query(Device).all()
             with self.lock:
                 for db_dev in devices:
-                    if db_dev.device_id == UNPROVISIONED_NODE_ID:
-                        continue
-                    if settings.is_gym_mode() and db_dev.device_id == STAGING_NODE_ID:
+                    if settings.is_transient_node(db_dev.device_id):
                         continue
                     dev = DeviceState(db_dev.device_id, offline_timeout=self.offline_timeout)
                     dev.name = db_dev.name
@@ -704,7 +702,7 @@ class CANListener:
                             self.devices[device_id].load_gym_fields(db_dev)
                         else:
                             # Transient IDs (127, and 1 in Gym Mode) must never be created as a registered row
-                            if not (device_id == UNPROVISIONED_NODE_ID or (settings.is_gym_mode() and device_id == STAGING_NODE_ID)):
+                            if not settings.is_transient_node(device_id):
                                 new_dev = Device(
                                     device_id=device_id,
                                     name=f"Lock {device_id}",
@@ -754,6 +752,10 @@ class CANListener:
         """Processes an incoming CAN frame dispatched from CANManager."""
         if not self.running or frame is None:
             return
+        # Outbound gateway/master frames (0x400 range, including 0x47F Master Beacon 0xB0)
+        # share low-bit addresses like 0x7F and must not be logged as lock/unprovisioned RX traffic.
+        if frame.message_type == CAN_MASTER:
+            return
         try:
             can_id_str = f"0x{frame.arbitration_id:03X}"
             payload_hex = " ".join(f"{b:02X}" for b in frame.data)
@@ -778,37 +780,7 @@ class CANListener:
             # Never create, persist, or emit device_update for device_id == 127.
             if dev_id == UNPROVISIONED_NODE_ID:
                 msg = self.parser.parse(frame)
-                if isinstance(msg, IdRequest):
-                    uid_hex = msg.uid32.hex().lower()
-                    with self.lock:
-                        if uid_hex not in self.unassigned_devices:
-                            self.unassigned_devices[uid_hex] = UnassignedDevice(msg.uid32)
-                        self.unassigned_devices[uid_hex].last_seen = time.time()
-
-                        for registered_id, registered_dev in list(self.devices.items()):
-                            if registered_id not in (STAGING_NODE_ID, UNPROVISIONED_NODE_ID) and (
-                                uids_match(registered_dev.hardware_uid, uid_hex) or uids_match(registered_dev.full_uid, uid_hex)
-                            ):
-                                registered_dev.mark_offline(unprovisioned=True)
-                                logger.warning(
-                                    f"Registered device {registered_id} announced as unassigned (factory reset); marked OFFLINE/UNPROVISIONED."
-                                )
-                                self.add_log(
-                                    registered_id,
-                                    "UNASSIGNED_ANNOUNCEMENT",
-                                    uid_hex,
-                                    f"Node {registered_id} announced as unassigned (factory reset); marked OFFLINE/UNPROVISIONED",
-                                    direction="RX",
-                                    can_id=can_id_str,
-                                    payload=payload_hex
-                                )
-                elif isinstance(msg, UIDPart1):
-                    with self.lock:
-                        self.latest_uid_part1 = msg.uid
-                elif isinstance(msg, UIDPart2):
-                    with self.lock:
-                        self.latest_uid_part2 = msg.uid
-                else:
+                if not self._handle_discovery_message(msg, can_id_str, payload_hex):
                     self.add_log(
                         dev_id,
                         "UNPROVISIONED_FRAME",
@@ -984,36 +956,8 @@ class CANListener:
                         dev.mark_seen()
                         err_name = ERROR_CODES.get(msg.error_code, f"ERROR_{msg.error_code}")
                         self.add_log(dev_id, "ERROR", None, f"Command 0x{msg.cmd:02X} rejected: {err_name}", direction="RX", can_id=can_id_str, payload=payload_hex, corr_id=msg.corr_id)
-                elif isinstance(msg, IdRequest):
-                    uid_hex = msg.uid32.hex().lower()
-                    with self.lock:
-                        if uid_hex not in self.unassigned_devices:
-                            self.unassigned_devices[uid_hex] = UnassignedDevice(msg.uid32)
-                        self.unassigned_devices[uid_hex].last_seen = time.time()
-
-                        # Requirement 3: Factory Reset / Unassigned Announcement Handling
-                        # When an unassigned announcement arrives for a known registered UID, mark it offline/unprovisioned
-                        for registered_id, registered_dev in list(self.devices.items()):
-                            if uids_match(registered_dev.hardware_uid, uid_hex) or uids_match(registered_dev.full_uid, uid_hex):
-                                registered_dev.mark_offline(unprovisioned=True)
-                                logger.warning(
-                                    f"Registered device {registered_id} announced as unassigned (factory reset); marked OFFLINE/UNPROVISIONED."
-                                )
-                                self.add_log(
-                                    registered_id,
-                                    "UNASSIGNED_ANNOUNCEMENT",
-                                    uid_hex,
-                                    f"Node {registered_id} announced as unassigned (factory reset); marked OFFLINE/UNPROVISIONED",
-                                    direction="RX",
-                                    can_id=can_id_str,
-                                    payload=payload_hex
-                                )
-                elif isinstance(msg, UIDPart1):
-                    with self.lock:
-                        self.latest_uid_part1 = msg.uid
-                elif isinstance(msg, UIDPart2):
-                    with self.lock:
-                        self.latest_uid_part2 = msg.uid
+                elif isinstance(msg, (IdRequest, UIDPart1, UIDPart2)):
+                    self._handle_discovery_message(msg, can_id_str, payload_hex)
 
                 elif isinstance(msg, WlInfoReport):
                     dev = self.get_device(dev_id)
@@ -1136,6 +1080,45 @@ class CANListener:
 
         except Exception as e:
             logger.error(f"CANListener handle_frame error: {e}")
+
+    def _handle_discovery_message(self, msg: Any, can_id_str: str, payload_hex: str) -> bool:
+        """Handles discovery/UID messages (IdRequest, UIDPart1, UIDPart2); returns True if handled."""
+        if isinstance(msg, IdRequest):
+            uid_hex = msg.uid32.hex().lower()
+            with self.lock:
+                if uid_hex not in self.unassigned_devices:
+                    self.unassigned_devices[uid_hex] = UnassignedDevice(msg.uid32)
+                self.unassigned_devices[uid_hex].last_seen = time.time()
+
+                # When an unassigned announcement arrives for a known registered UID, mark it offline/unprovisioned
+                for registered_id, registered_dev in list(self.devices.items()):
+                    if not settings.is_transient_node(registered_id) and (
+                        uids_match(registered_dev.hardware_uid, uid_hex)
+                        or uids_match(registered_dev.full_uid, uid_hex)
+                    ):
+                        registered_dev.mark_offline(unprovisioned=True)
+                        logger.warning(
+                            f"Registered device {registered_id} announced as unassigned (factory reset); marked OFFLINE/UNPROVISIONED."
+                        )
+                        self.add_log(
+                            registered_id,
+                            "UNASSIGNED_ANNOUNCEMENT",
+                            uid_hex,
+                            f"Node {registered_id} announced as unassigned (factory reset); marked OFFLINE/UNPROVISIONED",
+                            direction="RX",
+                            can_id=can_id_str,
+                            payload=payload_hex,
+                        )
+            return True
+        if isinstance(msg, UIDPart1):
+            with self.lock:
+                self.latest_uid_part1 = msg.uid
+            return True
+        if isinstance(msg, UIDPart2):
+            with self.lock:
+                self.latest_uid_part2 = msg.uid
+            return True
+        return False
 
     @staticmethod
     def _build_card_event(msg: StatusRFID, uid_hex: str) -> Optional[CardEvent]:

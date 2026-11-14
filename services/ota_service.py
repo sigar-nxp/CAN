@@ -13,7 +13,6 @@ import logging
 import time
 
 import binascii
-import errno
 import os
 import struct
 from typing import Any, Callable, Dict, List, Optional

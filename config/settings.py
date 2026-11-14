@@ -109,6 +109,16 @@ STAGING_NODE_ID = 1
 # Node 127 (0x7F) is the CAN unprovisioned default address used during discovery,
 # unassigned state, and factory reset. It must never be registered as an operational locker.
 UNPROVISIONED_NODE_ID = 0x7F  # 127
+TRANSIENT_NODE_IDS = (STAGING_NODE_ID, UNPROVISIONED_NODE_ID)
+
+
+def is_transient_node(device_id: int) -> bool:
+    """True when device_id is a transient address (Node 127 always; Node 1 in Gym Mode)."""
+    return device_id == UNPROVISIONED_NODE_ID or (
+        is_gym_mode() and device_id == STAGING_NODE_ID
+    )
+
+
 # Lockers are assigned the lowest free ID in this inclusive range (48 lockers per Pi).
 GYM_NODE_ID_MIN = 2
 GYM_NODE_ID_MAX = 49

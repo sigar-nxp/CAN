@@ -290,7 +290,7 @@ class GymLockerService:
                 target_ids = [
                     r.device_id
                     for r in occupied_rows
-                    if r.device_id not in (settings.STAGING_NODE_ID, settings.UNPROVISIONED_NODE_ID)
+                    if not settings.is_transient_node(r.device_id)
                 ]
 
             released_ids = []
